@@ -1,0 +1,273 @@
+import { useState, useEffect } from 'react';
+import type { SavedResult } from '../types';
+import { getResults, deleteResult } from '../lib/storage';
+
+export function Gallery() {
+  const [results, setResults] = useState<SavedResult[]>([]);
+  const [filter, setFilter] = useState<'all' | 'image' | 'video'>('all');
+  const [selectedResult, setSelectedResult] = useState<SavedResult | null>(null);
+
+  const loadResults = async () => {
+    const data = await getResults(filter === 'all' ? undefined : { type: filter });
+    setResults(data);
+  };
+
+  useEffect(() => {
+    loadResults();
+  }, [filter]);
+
+  const handleDelete = async (id: string) => {
+    if (confirm('Delete this result?')) {
+      await deleteResult(id);
+      loadResults();
+    }
+  };
+
+  const handleDownload = (url: string, filename: string) => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-gradient-to-br from-neutral-950 via-neutral-900 to-black relative">
+      {/* Background Blur Effects */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-blue-600/8 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-purple-600/8 rounded-full blur-3xl" />
+      </div>
+
+      {/* Header */}
+      <div className="flex-shrink-0 relative z-10" style={{ paddingLeft: '3rem', paddingRight: '3rem', paddingTop: '6rem', paddingBottom: '1.5rem' }}>
+        <div>
+          <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-white to-neutral-400 bg-clip-text text-transparent">
+            Gallery
+          </h1>
+          <p className="text-neutral-500 mb-6">
+            Browse and manage your generated content
+          </p>
+
+          {/* Filter Bar */}
+          <div className="flex items-center gap-4">
+            <div className="flex gap-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-1">
+              {[
+                { id: 'all' as const, label: 'All', icon: '🎨' },
+                { id: 'image' as const, label: 'Images', icon: '🖼️' },
+                { id: 'video' as const, label: 'Videos', icon: '🎬' },
+              ].map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setFilter(cat.id)}
+                  className={`px-4 h-9 text-sm rounded-lg transition-all ${
+                    filter === cat.id
+                      ? 'bg-white text-black font-medium shadow-lg'
+                      : 'text-neutral-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  <span className="mr-1.5">{cat.icon}</span>
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 text-sm text-neutral-500">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              {results.length} {results.length === 1 ? 'result' : 'results'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Gallery Grid */}
+      <div className="flex-1 overflow-auto relative z-10" style={{ paddingLeft: '3rem', paddingRight: '3rem', paddingBottom: '2rem' }}>
+        <div>
+          {results.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-neutral-500">
+              <svg className="w-20 h-20 mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <p className="text-sm">No results yet. Start creating!</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+              {results.map((result) => (
+                <div key={result.id} className="group relative bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden hover:border-white/20 transition-all">
+                  <div
+                    className="aspect-square cursor-pointer"
+                    onClick={() => setSelectedResult(result)}
+                  >
+                    {result.type === 'video' ? (
+                      <video
+                        src={Array.isArray(result.output) ? result.output[0] : result.output}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <img
+                        src={Array.isArray(result.output) ? result.output[0] : result.output}
+                        alt=""
+                        className="w-full h-full object-cover hover:scale-105 transition-transform"
+                      />
+                    )}
+                  </div>
+
+                  <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2 p-4 pointer-events-none">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDownload(
+                          Array.isArray(result.output) ? result.output[0] : result.output,
+                          `${result.model.replace('/', '-')}.${result.type === 'video' ? 'mp4' : 'png'}`
+                        );
+                      }}
+                      className="w-full px-3 py-2 bg-white text-black text-sm font-medium rounded-lg hover:bg-neutral-200 transition-all flex items-center justify-center gap-2 pointer-events-auto"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(result.id);
+                      }}
+                      className="w-full px-3 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-all flex items-center justify-center gap-2 pointer-events-auto"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      Delete
+                    </button>
+                  </div>
+
+                  <div className="p-3 border-t border-white/10">
+                    <div className="text-xs font-medium truncate text-white">{result.model}</div>
+                    {result.input.prompt && (
+                      <div className="text-xs text-neutral-500 truncate mt-1">{result.input.prompt}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Fullscreen Modal */}
+      {selectedResult && (
+        <div
+          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex"
+          onClick={() => setSelectedResult(null)}
+        >
+          <button
+            onClick={() => setSelectedResult(null)}
+            className="absolute top-6 right-6 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/20 backdrop-blur-sm border border-white/20 rounded-full transition-all z-10"
+          >
+            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+
+          {/* Left Panel - Info */}
+          <div
+            className="w-96 flex-shrink-0 bg-white/5 backdrop-blur-xl border-r border-white/20 p-8 flex flex-col overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-2xl font-bold text-white mb-6">Details</h2>
+
+            <div className="space-y-6 flex-1">
+              <div>
+                <div className="text-neutral-400 mb-2 text-xs uppercase tracking-wide">Model</div>
+                <div className="text-white font-medium">{selectedResult.model}</div>
+              </div>
+
+              <div>
+                <div className="text-neutral-400 mb-2 text-xs uppercase tracking-wide">Type</div>
+                <div className="text-white font-medium capitalize">{selectedResult.type}</div>
+              </div>
+
+              <div>
+                <div className="text-neutral-400 mb-2 text-xs uppercase tracking-wide">Created</div>
+                <div className="text-white font-medium">{new Date(selectedResult.createdAt).toLocaleString()}</div>
+              </div>
+
+              {selectedResult.input.prompt && (
+                <div>
+                  <div className="text-neutral-400 mb-2 text-xs uppercase tracking-wide">Prompt</div>
+                  <div className="text-white text-sm leading-relaxed">{selectedResult.input.prompt}</div>
+                </div>
+              )}
+
+              {Object.entries(selectedResult.input).map(([key, value]) => {
+                if (key === 'prompt' || typeof value === 'object') return null;
+                return (
+                  <div key={key}>
+                    <div className="text-neutral-400 mb-2 text-xs uppercase tracking-wide">{key}</div>
+                    <div className="text-white text-sm">{String(value)}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-col gap-3 mt-6 pt-6 border-t border-white/20">
+              <button
+                onClick={() =>
+                  handleDownload(
+                    Array.isArray(selectedResult.output) ? selectedResult.output[0] : selectedResult.output,
+                    `${selectedResult.model.replace('/', '-')}.${selectedResult.type === 'video' ? 'mp4' : 'png'}`
+                  )
+                }
+                className="w-full px-4 py-3 bg-white text-black text-sm font-medium rounded-xl hover:bg-neutral-200 transition-all flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download
+              </button>
+              <button
+                onClick={() => {
+                  handleDelete(selectedResult.id);
+                  setSelectedResult(null);
+                }}
+                className="w-full px-4 py-3 bg-red-600 text-white text-sm font-medium rounded-xl hover:bg-red-700 transition-all flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Delete
+              </button>
+            </div>
+          </div>
+
+          {/* Right Panel - Image Display */}
+          <div
+            className="flex-1 flex items-center justify-center p-8 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            style={{ minHeight: 0 }}
+          >
+            {selectedResult.type === 'video' ? (
+              <video
+                src={Array.isArray(selectedResult.output) ? selectedResult.output[0] : selectedResult.output}
+                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                className="rounded-2xl shadow-2xl"
+                controls
+                autoPlay
+              />
+            ) : (
+              <img
+                src={Array.isArray(selectedResult.output) ? selectedResult.output[0] : selectedResult.output}
+                alt=""
+                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                className="rounded-2xl shadow-2xl"
+              />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
