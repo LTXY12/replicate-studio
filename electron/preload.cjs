@@ -1,7 +1,22 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electron', {
-  platform: process.platform
+  platform: process.platform,
+
+  // File system operations
+  fs: {
+    saveFile: (filename, data) => ipcRenderer.invoke('fs:saveFile', filename, data),
+    readFile: (filename) => ipcRenderer.invoke('fs:readFile', filename),
+    deleteFile: (filename) => ipcRenderer.invoke('fs:deleteFile', filename),
+    listFiles: () => ipcRenderer.invoke('fs:listFiles'),
+    readMetadata: () => ipcRenderer.invoke('fs:readMetadata'),
+    writeMetadata: (data) => ipcRenderer.invoke('fs:writeMetadata', data),
+    getStoragePath: () => ipcRenderer.invoke('fs:getStoragePath'),
+    setStoragePath: (path) => ipcRenderer.invoke('fs:setStoragePath', path),
+    selectDirectory: () => ipcRenderer.invoke('fs:selectDirectory'),
+    getMaxResults: () => ipcRenderer.invoke('fs:getMaxResults'),
+    setMaxResults: (value) => ipcRenderer.invoke('fs:setMaxResults', value)
+  }
 });

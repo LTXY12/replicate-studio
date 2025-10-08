@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import type { ReplicateModel, Prediction, ModelSchema } from '../types';
 import { ReplicateClient } from '../lib/replicate';
 import { useApiKey } from '../hooks/useApiKey';
-import { saveResult } from '../lib/storage';
+import { saveResult, cleanupOldResults } from '../lib/storage';
 import { DynamicForm } from './DynamicForm';
 
 interface PredictionRunnerProps {
@@ -19,9 +19,51 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
   const [loadingSchema, setLoadingSchema] = useState(true);
   const [error, setError] = useState('');
 
+  const modelKey = `${model.owner}/${model.name}`;
+
   useEffect(() => {
     loadSchema();
   }, [model]);
+
+  useEffect(() => {
+    // Load saved form values for this model
+    const savedValues = localStorage.getItem(`model_state_${modelKey}`);
+    if (savedValues && schema) {
+      try {
+        setFormValues(JSON.parse(savedValues));
+      } catch (e) {
+        console.error('Failed to load saved values', e);
+      }
+    }
+  }, [schema, modelKey]);
+
+  const saveFormValues = (values: { [key: string]: any }) => {
+    // Clean up empty arrays and empty strings
+    const cleanedValues = { ...values };
+    Object.keys(cleanedValues).forEach(key => {
+      const value = cleanedValues[key];
+      if (Array.isArray(value) && value.length === 0) {
+        delete cleanedValues[key];
+      } else if (value === '' || value === null) {
+        delete cleanedValues[key];
+      }
+    });
+
+    setFormValues(cleanedValues);
+    localStorage.setItem(`model_state_${modelKey}`, JSON.stringify(cleanedValues));
+  };
+
+  const resetFormValues = () => {
+    const properties = schema?.openapi_schema?.components?.schemas?.Input?.properties || {};
+    const defaults: { [key: string]: any } = {};
+    Object.keys(properties).forEach((key) => {
+      if (properties[key].default !== undefined) {
+        defaults[key] = properties[key].default;
+      }
+    });
+    setFormValues(defaults);
+    localStorage.removeItem(`model_state_${modelKey}`);
+  };
 
   const loadSchema = async () => {
     if (!apiKey) return;
@@ -56,7 +98,19 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
 
     try {
       const client = new ReplicateClient(apiKey);
-      const pred = await client.createPrediction(schema.id, formValues);
+
+      // Clean formValues before sending to API
+      const cleanInput = { ...formValues };
+      Object.keys(cleanInput).forEach(key => {
+        const value = cleanInput[key];
+        if (Array.isArray(value) && value.length === 0) {
+          delete cleanInput[key];
+        } else if (value === '' || value === null || value === undefined) {
+          delete cleanInput[key];
+        }
+      });
+
+      const pred = await client.createPrediction(schema.id, cleanInput);
       setPrediction(pred);
 
       const finalPred = await client.waitForPrediction(pred.id, (p) => {
@@ -72,6 +126,9 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
           createdAt: Date.now(),
           type: model.category === 'video' ? 'video' : 'image'
         });
+
+        // Auto cleanup old results to prevent storage issues
+        await cleanupOldResults(100); // Keep last 100 results
       }
 
       setPrediction(finalPred);
@@ -93,7 +150,7 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
       </div>
 
       {/* Floating Header */}
-      <div className="flex-shrink-0 relative z-10" style={{ paddingLeft: '3rem', paddingRight: '3rem', paddingTop: '1.5rem', paddingBottom: '1rem' }}>
+      <div className="flex-shrink-0 relative z-10" style={{ paddingLeft: '3rem', paddingRight: '3rem', paddingTop: '1rem', paddingBottom: '1rem' }}>
         <div>
           <div className="flex items-center gap-4 mb-4">
             <button
@@ -164,12 +221,12 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                   <DynamicForm
                     schema={schema.openapi_schema?.components?.schemas?.Input?.properties || {}}
                     values={formValues}
-                    onChange={setFormValues}
+                    onChange={saveFormValues}
                   />
                 </div>
 
                 {/* Run Button Fixed at Bottom */}
-                <div className="p-5 border-t border-white/10 flex-shrink-0">
+                <div className="p-5 border-t border-white/10 flex-shrink-0 space-y-2">
                   <button
                     onClick={handleRun}
                     disabled={loading || loadingSchema}
@@ -186,6 +243,13 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                     ) : (
                       '▶ Run Model'
                     )}
+                  </button>
+                  <button
+                    onClick={resetFormValues}
+                    disabled={loading || loadingSchema}
+                    className="w-full px-4 py-2 bg-white/5 border border-white/10 text-white text-sm rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                  >
+                    Reset to Default
                   </button>
                 </div>
               </>
@@ -239,21 +303,49 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                 <div className="space-y-4">
                   {Array.isArray(prediction.output) ? (
                     prediction.output.map((url, i) => (
-                      <div key={i} className="rounded-xl overflow-hidden border border-white/20 shadow-2xl">
+                      <div key={i} className="relative group rounded-xl overflow-hidden border border-white/20 shadow-2xl">
                         {model.category === 'video' ? (
                           <video src={url} controls className="w-full" />
                         ) : (
                           <img src={url} alt="Output" className="w-full" />
                         )}
+                        <button
+                          onClick={() => {
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `output-${Date.now()}-${i}.${model.category === 'video' ? 'mp4' : 'png'}`;
+                            a.click();
+                          }}
+                          className="absolute bottom-4 right-4 p-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm font-medium shadow-lg transition-all opacity-0 group-hover:opacity-100 flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          Download
+                        </button>
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-xl overflow-hidden border border-white/20 shadow-2xl">
+                    <div className="relative group rounded-xl overflow-hidden border border-white/20 shadow-2xl">
                       {model.category === 'video' ? (
                         <video src={prediction.output} controls className="w-full" />
                       ) : (
                         <img src={prediction.output} alt="Output" className="w-full" />
                       )}
+                      <button
+                        onClick={() => {
+                          const a = document.createElement('a');
+                          a.href = prediction.output as string;
+                          a.download = `output-${Date.now()}.${model.category === 'video' ? 'mp4' : 'png'}`;
+                          a.click();
+                        }}
+                        className="absolute bottom-4 right-4 p-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm font-medium shadow-lg transition-all opacity-0 group-hover:opacity-100 flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Download
+                      </button>
                     </div>
                   )}
                 </div>

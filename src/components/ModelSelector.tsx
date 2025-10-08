@@ -10,15 +10,35 @@ interface ModelSelectorProps {
 
 export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
   const { apiKey } = useApiKey();
-  const [category, setCategory] = useState<'all' | 'image' | 'video' | 'edit'>('all');
+  const [category, setCategory] = useState<'all' | 'image' | 'video' | 'edit' | 'favorites'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [customModel, setCustomModel] = useState('');
   const [models, setModels] = useState<ReplicateModel[]>(PRESET_MODELS);
   const [loading, setLoading] = useState(false);
+  const [favorites, setFavorites] = useState<Set<string>>(() => {
+    const stored = localStorage.getItem('favorite_models');
+    return stored ? new Set(JSON.parse(stored)) : new Set();
+  });
 
   useEffect(() => {
     if (apiKey) {
-      loadCollectionModels();
+      // Load cached models first
+      const cachedModels = localStorage.getItem('cached_models');
+      const cachedTimestamp = localStorage.getItem('cached_models_timestamp');
+
+      if (cachedModels && cachedTimestamp) {
+        try {
+          const models = JSON.parse(cachedModels);
+          setModels(models);
+          console.log(`Loaded ${models.length} models from cache`);
+        } catch (e) {
+          console.error('Failed to load cached models', e);
+          loadCollectionModels();
+        }
+      } else {
+        // No cache, load from API
+        loadCollectionModels();
+      }
     }
   }, [apiKey]);
 
@@ -116,6 +136,10 @@ export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
 
       console.log(`Loaded ${allModels.length} models total`);
       setModels(allModels);
+
+      // Cache the models
+      localStorage.setItem('cached_models', JSON.stringify(allModels));
+      localStorage.setItem('cached_models_timestamp', Date.now().toString());
     } catch (error) {
       console.error('Failed to load collection models:', error);
       // Fallback to preset models
@@ -143,9 +167,24 @@ export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
     return parseInt(runs) || 0;
   };
 
+  const toggleFavorite = (modelKey: string) => {
+    const newFavorites = new Set(favorites);
+    if (newFavorites.has(modelKey)) {
+      newFavorites.delete(modelKey);
+    } else {
+      newFavorites.add(modelKey);
+    }
+    setFavorites(newFavorites);
+    localStorage.setItem('favorite_models', JSON.stringify([...newFavorites]));
+  };
+
   const filteredModels = useMemo(() => {
     let filtered = models;
-    if (category !== 'all') filtered = filtered.filter((m) => m.category === category);
+    if (category === 'favorites') {
+      filtered = filtered.filter((m) => favorites.has(`${m.owner}/${m.name}`));
+    } else if (category !== 'all') {
+      filtered = filtered.filter((m) => m.category === category);
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       filtered = filtered.filter((m) =>
@@ -155,7 +194,7 @@ export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
       );
     }
     return filtered;
-  }, [models, category, searchQuery]);
+  }, [models, category, searchQuery, favorites]);
 
   const handleCustomModel = () => {
     if (!customModel.includes('/')) return;
@@ -172,7 +211,7 @@ export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
       </div>
 
       {/* Header Section */}
-      <div className="flex-shrink-0 relative z-10" style={{ paddingLeft: '3rem', paddingRight: '3rem', paddingTop: '6rem', paddingBottom: '1.5rem' }}>
+      <div className="flex-shrink-0 relative z-10" style={{ paddingLeft: '3rem', paddingRight: '3rem', paddingTop: '2rem', paddingBottom: '1.5rem' }}>
         <div>
           <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-white to-neutral-400 bg-clip-text text-transparent">
             Explore Models
@@ -196,9 +235,22 @@ export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
               />
             </div>
 
+            <button
+              onClick={loadCollectionModels}
+              disabled={loading}
+              className="h-11 px-4 bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl hover:bg-white/10 hover:border-white/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              title="Refresh models from API"
+            >
+              <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span className="text-sm">Refresh</span>
+            </button>
+
             <div className="flex gap-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-1">
               {[
                 { id: 'all', label: 'All', icon: '⚡' },
+                { id: 'favorites', label: 'Favorites', icon: '⭐' },
                 { id: 'image', label: 'Image', icon: '🖼️' },
                 { id: 'video', label: 'Video', icon: '🎬' },
                 { id: 'edit', label: 'Edit', icon: '✨' }
@@ -262,49 +314,67 @@ export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-              {filteredModels.map((model) => (
-                <div
-                  key={`${model.owner}/${model.name}`}
-                  className="group bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-5 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer"
-                  onClick={() => onSelectModel(model)}
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-white truncate mb-1">
-                        {model.name}
-                      </h3>
-                      <p className="text-xs text-neutral-500">
-                        by {model.owner}
-                      </p>
-                    </div>
-                    <span className={`ml-3 px-2.5 py-1 text-xs font-medium rounded-lg flex-shrink-0 ${
-                      model.category === 'image'
-                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
-                      model.category === 'video'
-                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
-                        'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                    }`}>
-                      {model.category === 'image' ? '🖼️ Image' : model.category === 'video' ? '🎬 Video' : '✨ Edit'}
-                    </span>
-                  </div>
+              {filteredModels.map((model) => {
+                const modelKey = `${model.owner}/${model.name}`;
+                const isFavorite = favorites.has(modelKey);
+                return (
+                  <div
+                    key={modelKey}
+                    className="group bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-5 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer relative"
+                    onClick={() => onSelectModel(model)}
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFavorite(modelKey);
+                      }}
+                      className="absolute top-3 right-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-all z-10"
+                    >
+                      {isFavorite ? (
+                        <span className="text-xl">⭐</span>
+                      ) : (
+                        <span className="text-xl opacity-30 group-hover:opacity-100 transition-opacity">☆</span>
+                      )}
+                    </button>
 
-                  <p className="text-sm text-neutral-400 mb-4 line-clamp-2 min-h-[2.5rem]">
-                    {model.description}
-                  </p>
-
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-xs text-neutral-500">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                      </svg>
-                      {model.runs}
+                    <div className="flex items-start justify-between mb-3 pr-8">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-white truncate mb-1">
+                          {model.name}
+                        </h3>
+                        <p className="text-xs text-neutral-500">
+                          by {model.owner}
+                        </p>
+                      </div>
+                      <span className={`ml-3 px-2.5 py-1 text-xs font-medium rounded-lg flex-shrink-0 ${
+                        model.category === 'image'
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                        model.category === 'video'
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
+                          'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      }`}>
+                        {model.category === 'image' ? '🖼️ Image' : model.category === 'video' ? '🎬 Video' : '✨ Edit'}
+                      </span>
                     </div>
-                    <div className="px-3 py-1.5 bg-white/10 text-white text-xs font-medium rounded-lg group-hover:bg-white group-hover:text-black transition-all">
-                      Open →
+
+                    <p className="text-sm text-neutral-400 mb-4 line-clamp-2 min-h-[2.5rem]">
+                      {model.description}
+                    </p>
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-xs text-neutral-500">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        {model.runs}
+                      </div>
+                      <div className="px-3 py-1.5 bg-white/10 text-white text-xs font-medium rounded-lg group-hover:bg-white group-hover:text-black transition-all">
+                        Open →
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

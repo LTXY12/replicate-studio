@@ -1,7 +1,7 @@
 {
   "name": "replicate-webui",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Replicate API WebUI - Desktop Application",
   "author": "Replicate Studio",
   "main": "electron/main.cjs",

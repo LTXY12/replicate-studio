@@ -82,53 +82,66 @@ export function DynamicForm({ schema, values, onChange }: DynamicFormProps) {
     }
 
     if (prop.type === 'array' && (prop.format === 'uri' || key.includes('image') || key.includes('video'))) {
-      const uploadedFile = Array.isArray(value) ? value[0] : null;
+      const uploadedFiles = Array.isArray(value) ? value : [];
       return (
-        <div>
-          {uploadedFile ? (
-            <div className="relative group">
-              <div className="border-2 border-white/20 rounded-lg overflow-hidden">
-                {uploadedFile.startsWith('data:video') ? (
-                  <video src={uploadedFile} className="w-full max-h-48 object-contain bg-black" controls />
-                ) : (
-                  <img src={uploadedFile} alt="Uploaded" className="w-full max-h-48 object-contain bg-black" />
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => handleChange(key, null)}
-                className="absolute top-2 right-2 p-2 bg-red-600 hover:bg-red-700 rounded-lg text-white text-xs font-medium transition-all opacity-0 group-hover:opacity-100"
-              >
-                Remove
-              </button>
-              <p className="text-xs text-neutral-500 mt-2 text-center">✓ File uploaded</p>
+        <div className="space-y-3">
+          {uploadedFiles.length > 0 && (
+            <div className="grid grid-cols-2 gap-3">
+              {uploadedFiles.map((file, index) => (
+                <div key={index} className="relative group">
+                  <div className="border-2 border-white/20 rounded-lg overflow-hidden">
+                    {file.startsWith('data:video') ? (
+                      <video src={file} className="w-full h-32 object-cover bg-black" controls />
+                    ) : (
+                      <img src={file} alt={`Uploaded ${index + 1}`} className="w-full h-32 object-cover bg-black" />
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newFiles = uploadedFiles.filter((_, i) => i !== index);
+                      handleChange(key, newFiles);
+                    }}
+                    className="absolute top-2 right-2 p-1.5 bg-red-600 hover:bg-red-700 rounded-lg text-white text-xs font-medium transition-all opacity-0 group-hover:opacity-100"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
             </div>
-          ) : (
-            <label className="block w-full p-6 border-2 border-dashed border-white/10 rounded-lg cursor-pointer hover:border-white/30 hover:bg-white/5 transition-all text-center group">
-              <svg className="w-10 h-10 mx-auto mb-3 text-neutral-500 group-hover:text-neutral-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              <p className="text-sm text-neutral-400 group-hover:text-neutral-300 transition-colors">
-                Click to upload or drag & drop
-              </p>
-              <p className="text-xs text-neutral-600 mt-1">Image or Video files</p>
-              <input
-                type="file"
-                accept="image/*,video/*"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    const reader = new FileReader();
+          )}
+          <label className="block w-full p-6 border-2 border-dashed border-white/10 rounded-lg cursor-pointer hover:border-white/30 hover:bg-white/5 transition-all text-center group">
+            <svg className="w-10 h-10 mx-auto mb-3 text-neutral-500 group-hover:text-neutral-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <p className="text-sm text-neutral-400 group-hover:text-neutral-300 transition-colors">
+              {uploadedFiles.length > 0 ? 'Add more files' : 'Click to upload or drag & drop'}
+            </p>
+            <p className="text-xs text-neutral-600 mt-1">Multiple images or videos supported</p>
+            <input
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              onChange={async (e) => {
+                const files = Array.from(e.target.files || []);
+                const newFiles: string[] = [];
+
+                for (const file of files) {
+                  const reader = new FileReader();
+                  await new Promise((resolve) => {
                     reader.onload = (event) => {
-                      handleChange(key, [event.target?.result as string]);
+                      newFiles.push(event.target?.result as string);
+                      resolve(null);
                     };
                     reader.readAsDataURL(file);
-                  }
-                }}
-                className="hidden"
-              />
-            </label>
-          )}
+                  });
+                }
+
+                handleChange(key, [...uploadedFiles, ...newFiles]);
+              }}
+              className="hidden"
+            />
+          </label>
         </div>
       );
     }
@@ -206,7 +219,7 @@ export function DynamicForm({ schema, values, onChange }: DynamicFormProps) {
             value={value || ''}
             onChange={(e) => handleChange(key, e.target.value)}
             rows={5}
-            className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all resize-none"
+            className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all resize-y min-h-[120px]"
             placeholder="Describe what you want to create..."
           />
         );
