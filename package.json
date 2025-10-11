@@ -1,7 +1,7 @@
 {
   "name": "replicate-webui",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Replicate API WebUI - Desktop Application",
   "author": "Replicate Studio",
   "main": "electron/main.cjs",
@@ -34,6 +34,7 @@
     },
     "mac": {
       "category": "public.app-category.developer-tools",
+      "identity": null,
       "target": [
         {
           "target": "dmg",

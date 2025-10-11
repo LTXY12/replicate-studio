@@ -13,9 +13,13 @@ contextBridge.exposeInMainWorld('electron', {
     listFiles: () => ipcRenderer.invoke('fs:listFiles'),
     readMetadata: () => ipcRenderer.invoke('fs:readMetadata'),
     writeMetadata: (data) => ipcRenderer.invoke('fs:writeMetadata', data),
+    writeMetadataToFile: (filename, metadata) => ipcRenderer.invoke('fs:writeMetadataToFile', filename, metadata),
+    readMetadataFromFile: (filename) => ipcRenderer.invoke('fs:readMetadataFromFile', filename),
     getStoragePath: () => ipcRenderer.invoke('fs:getStoragePath'),
     setStoragePath: (path) => ipcRenderer.invoke('fs:setStoragePath', path),
     selectDirectory: () => ipcRenderer.invoke('fs:selectDirectory'),
+    selectInputFile: () => ipcRenderer.invoke('fs:selectInputFile'),
+    selectDownloadPath: () => ipcRenderer.invoke('fs:selectDownloadPath'),
     getMaxResults: () => ipcRenderer.invoke('fs:getMaxResults'),
     setMaxResults: (value) => ipcRenderer.invoke('fs:setMaxResults', value)
   }

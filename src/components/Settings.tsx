@@ -12,6 +12,10 @@ export function Settings({ onComplete }: SettingsProps) {
   const [input, setInput] = useState(apiKey);
   const [storagePath, setStoragePath] = useState('');
   const [maxResults, setMaxResultsState] = useState(200);
+  const [retryCount, setRetryCountState] = useState(() => {
+    const saved = localStorage.getItem('auto_retry_count');
+    return saved ? parseInt(saved) : 0;
+  });
 
   useEffect(() => {
     if (isElectron) {
@@ -50,6 +54,11 @@ export function Settings({ onComplete }: SettingsProps) {
       const electron = (window as any).electron;
       await electron.fs.setMaxResults(value);
     }
+  };
+
+  const handleRetryCountChange = (value: number) => {
+    setRetryCountState(value);
+    localStorage.setItem('auto_retry_count', value.toString());
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -157,6 +166,28 @@ export function Settings({ onComplete }: SettingsProps) {
                 </p>
               </div>
             )}
+
+            <div>
+              <label className="block text-base font-semibold text-white mb-4">
+                🔄 Auto Retry Count
+              </label>
+              <div className="flex gap-3 items-center">
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  value={retryCount}
+                  onChange={(e) => handleRetryCountChange(parseInt(e.target.value) || 0)}
+                  className="w-32 px-5 py-4 bg-white/10 border border-white/20 rounded-2xl text-base focus:outline-none focus:border-purple-400 focus:bg-white/15 transition-all"
+                />
+                <span className="text-sm text-neutral-400">
+                  {retryCount === 0 ? '(No retry)' : 'times'}
+                </span>
+              </div>
+              <p className="mt-4 text-sm text-neutral-400 leading-relaxed">
+                Automatically retry failed predictions. Set to 0 to disable auto-retry.
+              </p>
+            </div>
 
             <div className="flex gap-3">
               <button

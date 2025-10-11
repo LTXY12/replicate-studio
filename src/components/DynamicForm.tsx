@@ -122,6 +122,17 @@ export function DynamicForm({ schema, values, onChange }: DynamicFormProps) {
               type="file"
               accept="image/*,video/*"
               multiple
+              onClick={async (e) => {
+                // Use Electron file dialog if available
+                const electron = (window as any).electron;
+                if (electron?.fs?.selectInputFile) {
+                  e.preventDefault();
+                  const result = await electron.fs.selectInputFile();
+                  if (result.success && result.data) {
+                    handleChange(key, [...uploadedFiles, result.data]);
+                  }
+                }
+              }}
               onChange={async (e) => {
                 const files = Array.from(e.target.files || []);
                 const newFiles: string[] = [];
@@ -193,6 +204,17 @@ export function DynamicForm({ schema, values, onChange }: DynamicFormProps) {
                 <input
                   type="file"
                   accept="image/*,video/*"
+                  onClick={async (e) => {
+                    // Use Electron file dialog if available
+                    const electron = (window as any).electron;
+                    if (electron?.fs?.selectInputFile) {
+                      e.preventDefault();
+                      const result = await electron.fs.selectInputFile();
+                      if (result.success && result.data) {
+                        handleChange(key, result.data);
+                      }
+                    }
+                  }}
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (file) {

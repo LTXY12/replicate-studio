@@ -18,6 +18,17 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
   const [loading, setLoading] = useState(false);
   const [loadingSchema, setLoadingSchema] = useState(true);
   const [error, setError] = useState('');
+  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
+  const [filenamePrefix, setFilenamePrefix] = useState(() => {
+    return localStorage.getItem('filename_prefix') || 'output';
+  });
+  const [showFilenameInput, setShowFilenameInput] = useState(false);
+  const [tempFilenameInput, setTempFilenameInput] = useState(filenamePrefix);
+  const [inputSizeWarning, setInputSizeWarning] = useState('');
+  const [maxRetries] = useState(() => {
+    const saved = localStorage.getItem('auto_retry_count');
+    return saved ? parseInt(saved) : 0;
+  });
 
   const modelKey = `${model.owner}/${model.name}`;
 
@@ -65,6 +76,22 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     localStorage.removeItem(`model_state_${modelKey}`);
   };
 
+  const handleFilenameChange = () => {
+    setFilenamePrefix(tempFilenameInput);
+    localStorage.setItem('filename_prefix', tempFilenameInput);
+    setShowFilenameInput(false);
+  };
+
+  const handleTempFolderSelect = async () => {
+    const electron = (window as any).electron;
+    if (electron?.fs?.selectDirectory) {
+      const result = await electron.fs.selectDirectory();
+      if (result.success && result.path) {
+        // Folder changed successfully
+      }
+    }
+  };
+
   const loadSchema = async () => {
     if (!apiKey) return;
     setLoadingSchema(true);
@@ -90,8 +117,49 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     }
   };
 
-  const handleRun = async () => {
+  // Calculate total size of input images
+  const calculateInputSize = (values: { [key: string]: any }): number => {
+    let totalSize = 0;
+
+    for (const value of Object.values(values)) {
+      if (typeof value === 'string' && value.startsWith('data:')) {
+        // Base64 data URL
+        const base64 = value.split(',')[1];
+        if (base64) {
+          // Base64 encoding increases size by ~33%, so decode to get actual size
+          totalSize += (base64.length * 3) / 4;
+        }
+      } else if (Array.isArray(value)) {
+        // Array of images
+        for (const item of value) {
+          if (typeof item === 'string' && item.startsWith('data:')) {
+            const base64 = item.split(',')[1];
+            if (base64) {
+              totalSize += (base64.length * 3) / 4;
+            }
+          }
+        }
+      }
+    }
+
+    return totalSize;
+  };
+
+  const handleRun = async (currentAttempt = 0) => {
     if (!apiKey || !schema) return;
+
+    // Check input size (20MB limit) on first attempt
+    if (currentAttempt === 0) {
+      const inputSize = calculateInputSize(formValues);
+      const sizeMB = (inputSize / (1024 * 1024)).toFixed(2);
+
+      if (inputSize > 20 * 1024 * 1024) {
+        setInputSizeWarning(`⚠️ Warning: Input images total ${sizeMB}MB (exceeds 20MB limit). This may cause prediction failures.`);
+      } else {
+        setInputSizeWarning('');
+      }
+    }
+
     setLoading(true);
     setError('');
     setPrediction(null);
@@ -129,11 +197,50 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
 
         // Auto cleanup old results to prevent storage issues
         await cleanupOldResults(100); // Keep last 100 results
+      } else if (finalPred.status === 'failed' || finalPred.status === 'canceled') {
+        // Auto retry on failure if enabled
+        if (currentAttempt < maxRetries) {
+          const nextAttempt = currentAttempt + 1;
+          setError(`Attempt ${currentAttempt + 1} failed. Retrying... (${nextAttempt}/${maxRetries})`);
+
+          // Wait 2 seconds before retry
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          // Retry with incremented attempt count
+          setLoading(false);
+          return handleRun(nextAttempt);
+        } else if (maxRetries === 0) {
+          // Show reminder if auto-retry is disabled
+          setError(`Prediction ${finalPred.status}.\n\n💡 Tip: Enable auto-retry in Settings to automatically retry failed predictions.`);
+        } else {
+          // Max retries reached
+          setError(`Prediction ${finalPred.status} after ${currentAttempt + 1} attempts.`);
+        }
       }
 
       setPrediction(finalPred);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed');
+      const errorMsg = err instanceof Error ? err.message : 'Failed';
+
+      // Auto retry on error
+      if (currentAttempt < maxRetries) {
+        const nextAttempt = currentAttempt + 1;
+        setError(`${errorMsg} - Retrying... (${nextAttempt}/${maxRetries})`);
+
+        // Wait 2 seconds before retry
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Retry with incremented attempt count
+        setLoading(false);
+        return handleRun(nextAttempt);
+      }
+
+      // Show error with retry reminder if auto-retry is disabled
+      if (maxRetries === 0) {
+        setError(`${errorMsg}\n\n💡 Tip: Enable auto-retry in Settings to automatically retry failed predictions.`);
+      } else {
+        setError(`${errorMsg} after ${currentAttempt + 1} attempts.`);
+      }
     } finally {
       setLoading(false);
     }
@@ -225,10 +332,68 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                   />
                 </div>
 
-                {/* Run Button Fixed at Bottom */}
-                <div className="p-5 border-t border-white/10 flex-shrink-0 space-y-2">
+                {/* File Settings and Run Button Fixed at Bottom */}
+                <div className="p-5 border-t border-white/10 flex-shrink-0 space-y-3">
+                  {/* File Settings */}
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <button
+                        onClick={() => {
+                          setShowFilenameInput(!showFilenameInput);
+                          setTempFilenameInput(filenamePrefix);
+                        }}
+                        className="w-full px-3 py-2 bg-white/5 border border-white/10 text-white text-xs rounded-lg hover:bg-white/10 transition-all text-left truncate"
+                      >
+                        📝 {filenamePrefix}
+                      </button>
+                      {showFilenameInput && (
+                        <div className="absolute bottom-full left-0 right-0 mb-2 p-3 bg-neutral-900 border border-white/20 rounded-lg shadow-2xl z-20">
+                          <input
+                            type="text"
+                            value={tempFilenameInput}
+                            onChange={(e) => setTempFilenameInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleFilenameChange();
+                              if (e.key === 'Escape') setShowFilenameInput(false);
+                            }}
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-white/30 mb-2"
+                            placeholder="Filename prefix"
+                            autoFocus
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleFilenameChange}
+                              className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg transition-all"
+                            >
+                              OK
+                            </button>
+                            <button
+                              onClick={() => setShowFilenameInput(false)}
+                              className="flex-1 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white text-xs rounded-lg transition-all"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleTempFolderSelect}
+                      className="px-3 py-2 bg-white/5 border border-white/10 text-white text-xs rounded-lg hover:bg-white/10 transition-all whitespace-nowrap"
+                      title="Select temp folder"
+                    >
+                      📁 Temp Folder
+                    </button>
+                  </div>
+
+                  {inputSizeWarning && (
+                    <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-400 text-xs">
+                      {inputSizeWarning}
+                    </div>
+                  )}
+
                   <button
-                    onClick={handleRun}
+                    onClick={() => handleRun(0)}
                     disabled={loading || loadingSchema}
                     className="w-full px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-xl hover:from-blue-500 hover:to-purple-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-500/20"
                   >
@@ -303,18 +468,47 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                 <div className="space-y-4">
                   {Array.isArray(prediction.output) ? (
                     prediction.output.map((url, i) => (
-                      <div key={i} className="relative group rounded-xl overflow-hidden border border-white/20 shadow-2xl">
+                      <div key={i} className="relative group flex items-center justify-center">
                         {model.category === 'video' ? (
-                          <video src={url} controls className="w-full" />
+                          <video
+                            src={url}
+                            controls
+                            className="rounded-xl border border-white/20 shadow-2xl"
+                            style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }}
+                          />
                         ) : (
-                          <img src={url} alt="Output" className="w-full" />
+                          <img
+                            src={url}
+                            alt="Output"
+                            onClick={() => setFullscreenImage(url)}
+                            className="rounded-xl border border-white/20 shadow-2xl cursor-zoom-in hover:opacity-90 transition-opacity"
+                            style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }}
+                          />
                         )}
                         <button
-                          onClick={() => {
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = `output-${Date.now()}-${i}.${model.category === 'video' ? 'mp4' : 'png'}`;
-                            a.click();
+                          onClick={async () => {
+                            const electron = (window as any).electron;
+                            if (electron?.fs?.selectDownloadPath) {
+                              // Use Electron save dialog
+                              const result = await electron.fs.selectDownloadPath();
+                              if (result.success && result.path) {
+                                // Download file and save to selected path
+                                const response = await fetch(url);
+                                const blob = await response.blob();
+                                const reader = new FileReader();
+                                reader.onloadend = async () => {
+                                  const base64 = reader.result as string;
+                                  await electron.fs.saveFile(result.path, base64);
+                                };
+                                reader.readAsDataURL(blob);
+                              }
+                            } else {
+                              // Browser fallback
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `output-${Date.now()}-${i}.${model.category === 'video' ? 'mp4' : 'png'}`;
+                              a.click();
+                            }
                           }}
                           className="absolute bottom-4 right-4 p-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm font-medium shadow-lg transition-all opacity-0 group-hover:opacity-100 flex items-center gap-2"
                         >
@@ -326,18 +520,47 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                       </div>
                     ))
                   ) : (
-                    <div className="relative group rounded-xl overflow-hidden border border-white/20 shadow-2xl">
+                    <div className="relative group flex items-center justify-center">
                       {model.category === 'video' ? (
-                        <video src={prediction.output} controls className="w-full" />
+                        <video
+                          src={prediction.output}
+                          controls
+                          className="rounded-xl border border-white/20 shadow-2xl"
+                          style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }}
+                        />
                       ) : (
-                        <img src={prediction.output} alt="Output" className="w-full" />
+                        <img
+                          src={prediction.output}
+                          alt="Output"
+                          onClick={() => setFullscreenImage(prediction.output as string)}
+                          className="rounded-xl border border-white/20 shadow-2xl cursor-zoom-in hover:opacity-90 transition-opacity"
+                          style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }}
+                        />
                       )}
                       <button
-                        onClick={() => {
-                          const a = document.createElement('a');
-                          a.href = prediction.output as string;
-                          a.download = `output-${Date.now()}.${model.category === 'video' ? 'mp4' : 'png'}`;
-                          a.click();
+                        onClick={async () => {
+                          const electron = (window as any).electron;
+                          if (electron?.fs?.selectDownloadPath) {
+                            // Use Electron save dialog
+                            const result = await electron.fs.selectDownloadPath();
+                            if (result.success && result.path) {
+                              // Download file and save to selected path
+                              const response = await fetch(prediction.output as string);
+                              const blob = await response.blob();
+                              const reader = new FileReader();
+                              reader.onloadend = async () => {
+                                const base64 = reader.result as string;
+                                await electron.fs.saveFile(result.path, base64);
+                              };
+                              reader.readAsDataURL(blob);
+                            }
+                          } else {
+                            // Browser fallback
+                            const a = document.createElement('a');
+                            a.href = prediction.output as string;
+                            a.download = `output-${Date.now()}.${model.category === 'video' ? 'mp4' : 'png'}`;
+                            a.click();
+                          }
                         }}
                         className="absolute bottom-4 right-4 p-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm font-medium shadow-lg transition-all opacity-0 group-hover:opacity-100 flex items-center gap-2"
                       >
@@ -378,6 +601,31 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
           </div>
         </div>
       </div>
+
+      {/* Fullscreen Image Modal */}
+      {fullscreenImage && (
+        <div
+          className="fixed bg-black/95 backdrop-blur-xl flex items-center justify-center p-8"
+          style={{ top: '56px', left: 0, right: 0, bottom: 0, zIndex: 50 }}
+          onClick={() => setFullscreenImage(null)}
+        >
+          <button
+            onClick={() => setFullscreenImage(null)}
+            className="absolute top-6 right-6 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/20 backdrop-blur-sm border border-white/20 rounded-full transition-all z-10"
+          >
+            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <img
+            src={fullscreenImage}
+            alt="Fullscreen"
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-none max-h-none cursor-default rounded-xl shadow-2xl"
+            style={{ maxWidth: 'calc(100vw - 64px)', maxHeight: 'calc(100vh - 56px - 64px)', objectFit: 'contain' }}
+          />
+        </div>
+      )}
     </div>
   );
 }
