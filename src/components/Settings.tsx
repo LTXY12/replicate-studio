@@ -36,7 +36,7 @@ export function Settings({ onComplete }: SettingsProps) {
     const electron = (window as any).electron;
     const result = await electron.fs.getMaxResults();
     if (result.success) {
-      setMaxResultsState(result.value || 200);
+      setMaxResultsState(result.value !== undefined ? result.value : 200);
     }
   };
 
@@ -175,7 +175,6 @@ export function Settings({ onComplete }: SettingsProps) {
                 <input
                   type="number"
                   min="0"
-                  max="10"
                   value={retryCount}
                   onChange={(e) => handleRetryCountChange(parseInt(e.target.value) || 0)}
                   className="w-32 px-5 py-4 bg-white/10 border border-white/20 rounded-2xl text-base focus:outline-none focus:border-purple-400 focus:bg-white/15 transition-all"

@@ -117,6 +117,11 @@ function createWindow() {
     },
     backgroundColor: '#000000',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    titleBarOverlay: process.platform === 'win32' ? {
+      color: '#000000',
+      symbolColor: '#ffffff',
+      height: 40
+    } : false,
     frame: false,
     icon: path.join(__dirname, '../public/icon.png')
   });
@@ -469,7 +474,116 @@ ipcMain.handle('fs:writeMetadataToFile', async (event, filename, metadata) => {
   }
 });
 
-// Read metadata from image/video file using exiftool command line
+// Read metadata from multiple files at once (batch operation)
+ipcMain.handle('fs:readMetadataFromFiles', async (event, filenames) => {
+  try {
+    const storage = getStoragePath();
+    const results = {};
+
+    if (!filenames || filenames.length === 0) {
+      return { success: true, data: results };
+    }
+
+    // Build file paths
+    const filePaths = filenames.map(filename => path.join(storage, filename));
+
+    // Get file stats for creation times
+    const fileStats = {};
+    for (const filename of filenames) {
+      const filePath = path.join(storage, filename);
+      if (fs.existsSync(filePath)) {
+        const stats = fs.statSync(filePath);
+        fileStats[filename] = stats.birthtime.getTime();
+      }
+    }
+
+    // Execute exiftool on all files at once
+    const args = ['-json', '-charset', 'UTF8', '-Comment', '-Description', '-Artist', '-Author', '-UserComment'];
+    args.push(...filePaths);
+
+    try {
+      const { stdout } = await execFileAsync(exiftoolPath, args);
+      const exifResults = JSON.parse(stdout);
+
+      // Process each file's metadata
+      for (let i = 0; i < filenames.length; i++) {
+        const filename = filenames[i];
+        const exifData = exifResults[i];
+        const fileCreationTime = fileStats[filename] || Date.now();
+        const ext = path.extname(filename).toLowerCase();
+
+        if (!exifData) {
+          // No EXIF data
+          results[filename] = {
+            model: 'Unknown',
+            input: {},
+            predictionId: '',
+            createdAt: fileCreationTime,
+            type: ext === '.mp4' || ext === '.webm' ? 'video' : 'image'
+          };
+          continue;
+        }
+
+        // Try to parse full metadata from Comment field
+        let fullMetadata = null;
+        const commentFields = [
+          exifData['UserComment'],
+          exifData['Comment'],
+          exifData['Description']
+        ];
+
+        for (const field of commentFields) {
+          if (field && typeof field === 'string' && field.startsWith('{')) {
+            try {
+              fullMetadata = JSON.parse(field);
+              break;
+            } catch (e) {
+              // Not JSON
+            }
+          }
+        }
+
+        if (fullMetadata) {
+          if (!fullMetadata.createdAt) {
+            fullMetadata.createdAt = fileCreationTime;
+          }
+          results[filename] = fullMetadata;
+        } else {
+          // Construct from individual fields
+          results[filename] = {
+            model: exifData['Artist'] || exifData['Author'] || 'Unknown',
+            input: {
+              prompt: exifData['Description'] || exifData['Comment'] || ''
+            },
+            predictionId: '',
+            createdAt: fileCreationTime,
+            type: ext === '.mp4' || ext === '.webm' ? 'video' : 'image'
+          };
+        }
+      }
+
+      return { success: true, data: results };
+    } catch (execError) {
+      // If exiftool fails, return basic metadata with file creation times
+      for (const filename of filenames) {
+        const fileCreationTime = fileStats[filename] || Date.now();
+        const ext = path.extname(filename).toLowerCase();
+        results[filename] = {
+          model: 'Unknown',
+          input: {},
+          predictionId: '',
+          createdAt: fileCreationTime,
+          type: ext === '.mp4' || ext === '.webm' ? 'video' : 'image'
+        };
+      }
+      return { success: true, data: results };
+    }
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Read metadata from image/video file using exiftool command line (single file - for backward compatibility)
 ipcMain.handle('fs:readMetadataFromFile', async (event, filename) => {
   try {
     const storage = getStoragePath();

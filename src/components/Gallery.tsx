@@ -1,58 +1,99 @@
 import { useState, useEffect } from 'react';
 import type { SavedResult } from '../types';
-import { getResults, deleteResult } from '../lib/storage';
+import { getFileList, getResultsForFiles, deleteResult, loadResultFile } from '../lib/storage';
+
+// Extract tag (prefix) from filename
+// Format: YYMMDD_prefix_###.ext -> returns "prefix"
+const extractTag = (filename: string): string => {
+  const match = filename.match(/^\d{6}_(.+?)_\d{3}\./);
+  return match ? match[1] : 'untagged';
+};
 
 export function Gallery() {
+  const [fileList, setFileList] = useState<string[]>([]);
   const [results, setResults] = useState<SavedResult[]>([]);
   const [filter, setFilter] = useState<'all' | 'image' | 'video'>('all');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedResult, setSelectedResult] = useState<SavedResult | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
+  const [imageCache, setImageCache] = useState<{ [key: string]: string }>({});
   const itemsPerPage = 50;
 
-  const loadResults = async () => {
+  // Load file list with metadata (for proper time-based sorting)
+  const loadFileList = async () => {
     try {
-      const data = await getResults(filter === 'all' ? undefined : { type: filter });
-      setResults(data);
-      setCurrentPage(1); // Reset to first page when filter changes
+      const files = await getFileList(filter === 'all' ? undefined : { type: filter });
+
+      // Load ALL metadata to get creation times for sorting
+      const allResults = await getResultsForFiles(files);
+
+      // Sort by creation time (newest first)
+      allResults.sort((a, b) => b.createdAt - a.createdAt);
+
+      // Extract sorted file list
+      const sortedFiles = allResults.map(r => r.id);
+
+      setFileList(sortedFiles);
+      setResults(allResults);
+      setCurrentPage(1);
     } catch (error) {
-      console.error('Failed to load results:', error);
-      setResults([]);
+      console.error('Failed to load file list:', error);
+      setFileList([]);
     }
   };
 
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await loadResults();
+    await loadFileList();
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
-  // Load results on mount and when filter changes
+  // Extract unique tags from file list
+  const allTags = Array.from(new Set(fileList.map(extractTag))).sort();
+
+  // Filter files by selected tag
+  const filteredFileList = selectedTag
+    ? fileList.filter(file => extractTag(file) === selectedTag)
+    : fileList;
+
+  // Load file list on mount and when filter changes
   useEffect(() => {
-    loadResults();
+    loadFileList();
   }, [filter]);
 
-  // Auto-refresh when window gains focus (in case files were added externally)
+  // Reset page when tag changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedTag]);
+
+  // Auto-refresh when window gains focus
   useEffect(() => {
     const handleFocus = () => {
-      loadResults();
+      loadFileList();
     };
 
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
-  }, []);
+  }, [filter]);
 
-  // Calculate pagination
-  const totalPages = Math.ceil(results.length / itemsPerPage);
+  // Calculate pagination based on filtered file list
+  const totalPages = Math.ceil(filteredFileList.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
-  const currentResults = results.slice(startIndex, endIndex);
+
+  // Get current page files and filter loaded results
+  const currentPageFiles = filteredFileList.slice(startIndex, endIndex);
+  const currentResults = results
+    .filter(r => currentPageFiles.includes(r.id))
+    .sort((a, b) => b.createdAt - a.createdAt); // Sort by creation time (newest first)
 
   const handleDelete = async (id: string) => {
     if (confirm('Delete this result?')) {
       await deleteResult(id);
-      loadResults();
+      await loadFileList();
     }
   };
 
@@ -61,6 +102,35 @@ export function Gallery() {
     a.href = url;
     a.download = filename;
     a.click();
+  };
+
+  // Load image data on demand (with caching)
+  const loadImage = async (filename: string): Promise<string> => {
+    // Check cache first
+    if (imageCache[filename]) {
+      return imageCache[filename];
+    }
+
+    // Load from file
+    const data = await loadResultFile(filename);
+    if (data) {
+      setImageCache(prev => ({ ...prev, [filename]: data }));
+      return data;
+    }
+
+    return '';
+  };
+
+  // Load image when it becomes visible (lazy loading via useEffect in render)
+  const getImageUrl = (filename: string): string | null => {
+    // Return cached image if available
+    if (imageCache[filename]) {
+      return imageCache[filename];
+    }
+
+    // Trigger async load
+    loadImage(filename);
+    return null;
   };
 
   // Navigation functions for modal
@@ -79,6 +149,13 @@ export function Gallery() {
       setSelectedResult(currentResults[currentIndex + 1]);
     }
   };
+
+  // Load image when modal opens
+  useEffect(() => {
+    if (selectedResult && !imageCache[selectedResult.id]) {
+      loadImage(selectedResult.id);
+    }
+  }, [selectedResult]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -156,7 +233,8 @@ export function Gallery() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              {results.length} {results.length === 1 ? 'result' : 'results'}
+              {filteredFileList.length} {filteredFileList.length === 1 ? 'result' : 'results'}
+              {selectedTag && ` · Tag: ${selectedTag}`}
               {totalPages > 1 && (
                 <span className="text-neutral-600">
                   · Page {currentPage} of {totalPages}
@@ -164,13 +242,50 @@ export function Gallery() {
               )}
             </div>
           </div>
+
+          {/* Tag Filter */}
+          {allTags.length > 0 && (
+            <div className="mt-4">
+              <div className="flex items-center gap-2 text-xs text-neutral-500 mb-2">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                </svg>
+                Tags
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedTag(null)}
+                  className={`px-3 py-1.5 text-xs rounded-lg transition-all ${
+                    !selectedTag
+                      ? 'bg-purple-600 text-white font-medium shadow-lg shadow-purple-500/30'
+                      : 'bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 border border-white/10'
+                  }`}
+                >
+                  All
+                </button>
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => setSelectedTag(tag)}
+                    className={`px-3 py-1.5 text-xs rounded-lg transition-all ${
+                      selectedTag === tag
+                        ? 'bg-purple-600 text-white font-medium shadow-lg shadow-purple-500/30'
+                        : 'bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 border border-white/10'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Gallery Grid */}
       <div className="flex-1 overflow-auto relative z-10" style={{ paddingLeft: '3rem', paddingRight: '3rem', paddingBottom: '2rem' }}>
         <div>
-          {results.length === 0 ? (
+          {fileList.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-neutral-500">
               <svg className="w-20 h-20 mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -180,23 +295,34 @@ export function Gallery() {
           ) : (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                {currentResults.map((result) => (
+                {currentResults.map((result) => {
+                  const cachedImage = getImageUrl(result.id);
+                  return (
                 <div key={result.id} className="group relative bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden hover:border-white/20 transition-all">
                   <div
                     className="aspect-square cursor-pointer"
                     onClick={() => setSelectedResult(result)}
                   >
-                    {result.type === 'video' ? (
-                      <video
-                        src={Array.isArray(result.output) ? result.output[0] : result.output}
-                        className="w-full h-full object-cover"
-                      />
+                    {cachedImage ? (
+                      result.type === 'video' ? (
+                        <video
+                          src={cachedImage}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <img
+                          src={cachedImage}
+                          alt=""
+                          className="w-full h-full object-cover hover:scale-105 transition-transform"
+                        />
+                      )
                     ) : (
-                      <img
-                        src={Array.isArray(result.output) ? result.output[0] : result.output}
-                        alt=""
-                        className="w-full h-full object-cover hover:scale-105 transition-transform"
-                      />
+                      <div className="w-full h-full flex items-center justify-center bg-white/5">
+                        <svg className="animate-spin w-8 h-8 text-neutral-600" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                      </div>
                     )}
                   </div>
 
@@ -204,12 +330,12 @@ export function Gallery() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDownload(
-                          Array.isArray(result.output) ? result.output[0] : result.output,
-                          `${result.model.replace('/', '-')}.${result.type === 'video' ? 'mp4' : 'png'}`
-                        );
+                        if (cachedImage) {
+                          handleDownload(cachedImage, result.id);
+                        }
                       }}
-                      className="w-full px-3 py-2 bg-white text-black text-sm font-medium rounded-lg hover:bg-neutral-200 transition-all flex items-center justify-center gap-2 pointer-events-auto"
+                      disabled={!cachedImage}
+                      className="w-full px-3 py-2 bg-white text-black text-sm font-medium rounded-lg hover:bg-neutral-200 transition-all flex items-center justify-center gap-2 pointer-events-auto disabled:opacity-50"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -235,7 +361,8 @@ export function Gallery() {
                     <div className="text-xs text-neutral-500 truncate mt-1" title={result.model}>{result.model}</div>
                   </div>
                 </div>
-              ))}
+              );
+                })}
             </div>
 
             {/* Pagination */}
@@ -395,12 +522,12 @@ export function Gallery() {
             {/* Action Buttons */}
             <div className="flex flex-col gap-3 mt-6 pt-6 border-t border-white/20">
               <button
-                onClick={() =>
-                  handleDownload(
-                    Array.isArray(selectedResult.output) ? selectedResult.output[0] : selectedResult.output,
-                    `${selectedResult.model.replace('/', '-')}.${selectedResult.type === 'video' ? 'mp4' : 'png'}`
-                  )
-                }
+                onClick={() => {
+                  const cachedImage = imageCache[selectedResult.id];
+                  if (cachedImage) {
+                    handleDownload(cachedImage, selectedResult.id);
+                  }
+                }}
                 className="w-full px-4 py-3 bg-white text-black text-sm font-medium rounded-xl hover:bg-neutral-200 transition-all flex items-center justify-center gap-2"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -429,23 +556,37 @@ export function Gallery() {
             onClick={(e) => e.stopPropagation()}
             style={{ minHeight: 0 }}
           >
-            {selectedResult.type === 'video' ? (
-              <video
-                src={Array.isArray(selectedResult.output) ? selectedResult.output[0] : selectedResult.output}
-                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                className="rounded-2xl shadow-2xl"
-                controls
-                autoPlay
-              />
-            ) : (
-              <img
-                src={Array.isArray(selectedResult.output) ? selectedResult.output[0] : selectedResult.output}
-                alt=""
-                onClick={() => setFullscreenImage(Array.isArray(selectedResult.output) ? selectedResult.output[0] : selectedResult.output)}
-                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                className="rounded-2xl shadow-2xl cursor-zoom-in hover:opacity-90 transition-opacity"
-              />
-            )}
+            {(() => {
+              const cachedImage = imageCache[selectedResult.id];
+              if (!cachedImage) {
+                return (
+                  <div className="flex flex-col items-center justify-center gap-4">
+                    <svg className="animate-spin w-12 h-12 text-neutral-600" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    <p className="text-neutral-500">Loading image...</p>
+                  </div>
+                );
+              }
+              return selectedResult.type === 'video' ? (
+                <video
+                  src={cachedImage}
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                  className="rounded-2xl shadow-2xl"
+                  controls
+                  autoPlay
+                />
+              ) : (
+                <img
+                  src={cachedImage}
+                  alt=""
+                  onClick={() => setFullscreenImage(cachedImage)}
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                  className="rounded-2xl shadow-2xl cursor-zoom-in hover:opacity-90 transition-opacity"
+                />
+              );
+            })()}
           </div>
         </div>
       )}

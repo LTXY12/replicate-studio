@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electron', {
     writeMetadata: (data) => ipcRenderer.invoke('fs:writeMetadata', data),
     writeMetadataToFile: (filename, metadata) => ipcRenderer.invoke('fs:writeMetadataToFile', filename, metadata),
     readMetadataFromFile: (filename) => ipcRenderer.invoke('fs:readMetadataFromFile', filename),
+    readMetadataFromFiles: (filenames) => ipcRenderer.invoke('fs:readMetadataFromFiles', filenames),
     getStoragePath: () => ipcRenderer.invoke('fs:getStoragePath'),
     setStoragePath: (path) => ipcRenderer.invoke('fs:setStoragePath', path),
     selectDirectory: () => ipcRenderer.invoke('fs:selectDirectory'),

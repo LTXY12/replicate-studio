@@ -181,13 +181,13 @@ export const saveResult = async (result: Omit<SavedResult, 'id'>): Promise<strin
   }
 };
 
-export const getResults = async (
-  filter?: { type?: 'image' | 'video'; model?: string }
-): Promise<SavedResult[]> => {
+// Get file list only (without metadata) - very fast (Electron only)
+export const getFileList = async (
+  filter?: { type?: 'image' | 'video' }
+): Promise<string[]> => {
   if (isElectron) {
     const electron = (window as any).electron;
 
-    // List all files in storage directory
     const filesResult = await electron.fs.listFiles();
     if (!filesResult.success) {
       return [];
@@ -195,57 +195,116 @@ export const getResults = async (
 
     const allFiles = filesResult.files || [];
 
-    // Filter media files (not .json files)
-    const mediaFiles = allFiles.filter((file: string) => {
+    // Filter media files
+    let mediaFiles = allFiles.filter((file: string) => {
       const ext = file.match(/\.(jpg|jpeg|png|gif|webp|mp4|webm)$/i);
       return ext !== null;
     });
 
+    // Apply type filter if specified
+    if (filter?.type) {
+      mediaFiles = mediaFiles.filter((file: string) => {
+        const ext = file.match(/\.(jpg|jpeg|png|gif|webp|mp4|webm)$/i)?.[1]?.toLowerCase() || '';
+        const fileType = ['mp4', 'webm'].includes(ext) ? 'video' : 'image';
+        return fileType === filter.type;
+      });
+    }
+
+    return mediaFiles;
+  }
+
+  // For web version, get IDs from IndexedDB
+  const results = await db!.results.orderBy('createdAt').reverse().toArray();
+
+  let filteredResults = results;
+  if (filter?.type) {
+    filteredResults = results.filter(r => r.type === filter.type);
+  }
+
+  return filteredResults.map(r => r.id);
+};
+
+// Get results with metadata for specific files (paginated)
+export const getResultsForFiles = async (filenames: string[]): Promise<SavedResult[]> => {
+  if (isElectron) {
+    const electron = (window as any).electron;
+
+    if (filenames.length === 0) {
+      return [];
+    }
+
+    // Read metadata from specified files (batch operation)
+    const metadataBatchResult = await electron.fs.readMetadataFromFiles(filenames);
+    if (!metadataBatchResult.success) {
+      return [];
+    }
+
+    const allMetadata = metadataBatchResult.data || {};
     const results: SavedResult[] = [];
 
-    // Read metadata from each media file
-    for (const filename of mediaFiles) {
+    // Process each file
+    for (const filename of filenames) {
       try {
-        // Read file data
-        const fileResult = await electron.fs.readFile(filename);
-        if (!fileResult.success || !fileResult.data) continue;
-
-        // Read metadata from file
-        const metadataResult = await electron.fs.readMetadataFromFile(filename);
+        const metadata = allMetadata[filename];
 
         // Determine file type
         const ext = filename.match(/\.(jpg|jpeg|png|gif|webp|mp4|webm)$/i)?.[1]?.toLowerCase() || '';
         const type = ['mp4', 'webm'].includes(ext) ? 'video' : 'image';
 
-        // Use file birthtime (creation time) for sorting if metadata doesn't have createdAt
-        const createdAt = metadataResult.data?.createdAt || fileResult.birthtime || Date.now();
+        // Use metadata createdAt
+        const createdAt = metadata?.createdAt || Date.now();
 
-        // Create result object
+        // Create result object WITHOUT file data (will be loaded on demand)
         const result: SavedResult = {
-          id: filename, // Use filename as ID
-          predictionId: metadataResult.data?.predictionId || '',
-          model: metadataResult.data?.model || 'Unknown',
-          input: metadataResult.data?.input || {},
-          output: fileResult.data,
+          id: filename,
+          predictionId: metadata?.predictionId || '',
+          model: metadata?.model || 'Unknown',
+          input: metadata?.input || {},
+          output: '', // Empty string, will be loaded when needed
           createdAt: createdAt,
-          type: metadataResult.data?.type || type
+          type: metadata?.type || type
         };
 
         results.push(result);
       } catch (error) {
-        console.error(`Failed to read ${filename}:`, error);
+        console.error(`Failed to process metadata for ${filename}:`, error);
       }
     }
 
     // Sort by creation time (newest first)
     results.sort((a, b) => b.createdAt - a.createdAt);
 
-    if (filter) {
-      return results.filter((r: SavedResult) => {
-        if (filter.type && r.type !== filter.type) return false;
-        if (filter.model && r.model !== filter.model) return false;
-        return true;
-      });
+    return results;
+  }
+
+  // For web version, get from IndexedDB
+  if (filenames.length === 0) {
+    return [];
+  }
+
+  const results = await db!.results.bulkGet(filenames);
+  const validResults = results.filter((r): r is SavedResult => r !== undefined);
+
+  // Sort by creation time (newest first)
+  validResults.sort((a, b) => b.createdAt - a.createdAt);
+
+  return validResults;
+};
+
+// Get all results (legacy - for backward compatibility)
+export const getResults = async (
+  filter?: { type?: 'image' | 'video'; model?: string }
+): Promise<SavedResult[]> => {
+  if (isElectron) {
+    // Get all file names first (fast)
+    const fileList = await getFileList(filter);
+
+    // Load metadata for all files
+    const results = await getResultsForFiles(fileList);
+
+    // Apply model filter if specified
+    if (filter?.model) {
+      return results.filter(r => r.model === filter.model);
     }
 
     return results;
@@ -283,6 +342,25 @@ export const getResult = async (id: string): Promise<SavedResult | undefined> =>
   } else {
     return db!.results.get(id);
   }
+};
+
+// Load file data for a specific result (lazy loading)
+export const loadResultFile = async (filename: string): Promise<string | null> => {
+  if (isElectron) {
+    const electron = (window as any).electron;
+    const fileResult = await electron.fs.readFile(filename);
+    if (fileResult.success && fileResult.data) {
+      return fileResult.data;
+    }
+    return null;
+  }
+
+  // For web version, get from IndexedDB (output is already stored)
+  const result = await db!.results.get(filename);
+  if (result && result.output) {
+    return Array.isArray(result.output) ? result.output[0] : result.output;
+  }
+  return null;
 };
 
 // Clean up old results to prevent storage overflow

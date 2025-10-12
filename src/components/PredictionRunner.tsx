@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { ReplicateModel, Prediction, ModelSchema } from '../types';
 import { ReplicateClient } from '../lib/replicate';
 import { useApiKey } from '../hooks/useApiKey';
@@ -17,7 +17,6 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingSchema, setLoadingSchema] = useState(true);
-  const [error, setError] = useState('');
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [filenamePrefix, setFilenamePrefix] = useState(() => {
     return localStorage.getItem('filename_prefix') || 'output';
@@ -29,6 +28,13 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     const saved = localStorage.getItem('auto_retry_count');
     return saved ? parseInt(saved) : 0;
   });
+  const [currentAttemptDisplay, setCurrentAttemptDisplay] = useState(0);
+  const [totalAttemptsDisplay, setTotalAttemptsDisplay] = useState(0);
+  const [isRetrying, setIsRetrying] = useState(false); // true when waiting between retries
+  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const shouldStopAfterCurrentRef = useRef(false); // Use ref to access latest value in async callbacks
+  const abortControllerRef = useRef<AbortController | null>(null); // Use ref to maintain same controller reference
 
   const modelKey = `${model.owner}/${model.name}`;
 
@@ -64,7 +70,11 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     localStorage.setItem(`model_state_${modelKey}`, JSON.stringify(cleanedValues));
   };
 
-  const resetFormValues = () => {
+  const handleResetClick = () => {
+    setShowResetConfirm(true);
+  };
+
+  const handleResetConfirmed = () => {
     const properties = schema?.openapi_schema?.components?.schemas?.Input?.properties || {};
     const defaults: { [key: string]: any } = {};
     Object.keys(properties).forEach((key) => {
@@ -74,6 +84,11 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     });
     setFormValues(defaults);
     localStorage.removeItem(`model_state_${modelKey}`);
+    setShowResetConfirm(false);
+  };
+
+  const handleResetCancelled = () => {
+    setShowResetConfirm(false);
   };
 
   const handleFilenameChange = () => {
@@ -95,7 +110,6 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
   const loadSchema = async () => {
     if (!apiKey) return;
     setLoadingSchema(true);
-    setError('');
 
     try {
       const client = new ReplicateClient(apiKey);
@@ -111,7 +125,18 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
       });
       setFormValues(defaults);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load model');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to load model';
+      // Show error in Output panel
+      setPrediction({
+        id: 'schema-error',
+        status: 'failed',
+        error: `Failed to load model schema: ${errorMsg}`,
+        created_at: new Date().toISOString(),
+        model: `${model.owner}/${model.name}`,
+        input: {},
+        output: undefined,
+        metrics: undefined
+      });
     } finally {
       setLoadingSchema(false);
     }
@@ -145,6 +170,25 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     return totalSize;
   };
 
+  const handleStopClick = () => {
+    // Always show confirmation dialog
+    setShowStopConfirm(true);
+  };
+
+  const handleStopConfirmed = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setShowStopConfirm(false);
+      shouldStopAfterCurrentRef.current = false;
+    }
+  };
+
+  const handleStopWait = () => {
+    // Wait for current prediction to finish, then stop (no more retries)
+    shouldStopAfterCurrentRef.current = true;
+    setShowStopConfirm(false);
+  };
+
   const handleRun = async (currentAttempt = 0) => {
     if (!apiKey || !schema) return;
 
@@ -158,13 +202,34 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
       } else {
         setInputSizeWarning('');
       }
+
+      // Set total attempts for display
+      setTotalAttemptsDisplay(maxRetries + 1);
+      // Reset stop flag
+      shouldStopAfterCurrentRef.current = false;
+    }
+
+    // Create new abort controller (only on first attempt)
+    if (currentAttempt === 0) {
+      abortControllerRef.current = new AbortController();
+    }
+
+    // Use the ref controller for all operations
+    const controller = abortControllerRef.current;
+    if (!controller) {
+      return;
     }
 
     setLoading(true);
-    setError('');
+    setIsRetrying(false);
+    setCurrentAttemptDisplay(currentAttempt + 1);
     setPrediction(null);
 
     try {
+      // Check if aborted
+      if (controller.signal.aborted) {
+        throw new Error('Aborted by user');
+      }
       const client = new ReplicateClient(apiKey);
 
       // Clean formValues before sending to API
@@ -181,9 +246,51 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
       const pred = await client.createPrediction(schema.id, cleanInput);
       setPrediction(pred);
 
-      const finalPred = await client.waitForPrediction(pred.id, (p) => {
-        setPrediction(p);
-      });
+      // Manual polling loop with abort checking
+      let finalPred = pred;
+      while (
+        finalPred.status === 'starting' ||
+        finalPred.status === 'processing'
+      ) {
+        if (controller.signal.aborted) {
+          throw new Error('Aborted by user');
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        if (controller.signal.aborted) {
+          throw new Error('Aborted by user');
+        }
+
+        finalPred = await client.getPrediction(pred.id);
+        setPrediction(finalPred);
+      }
+
+      // Check if user requested to stop after current attempt (applies to both success and failure)
+      if (shouldStopAfterCurrentRef.current) {
+        if (finalPred.status === 'succeeded' && finalPred.output) {
+          await saveResult({
+            predictionId: finalPred.id,
+            model: `${model.owner}/${model.name}`,
+            input: formValues,
+            output: finalPred.output,
+            createdAt: Date.now(),
+            type: model.category === 'video' ? 'video' : 'image'
+          });
+          await cleanupOldResults(100);
+        }
+
+        setPrediction(finalPred);
+
+        // Cleanup and stop - DO NOT RETRY
+        setLoading(false);
+        abortControllerRef.current = null;
+        setIsRetrying(false);
+        setCurrentAttemptDisplay(0);
+        setTotalAttemptsDisplay(0);
+        shouldStopAfterCurrentRef.current = false;
+        return; // IMPORTANT: Exit function, don't continue
+      }
 
       if (finalPred.status === 'succeeded' && finalPred.output) {
         await saveResult({
@@ -201,48 +308,111 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
         // Auto retry on failure if enabled
         if (currentAttempt < maxRetries) {
           const nextAttempt = currentAttempt + 1;
-          setError(`Attempt ${currentAttempt + 1} failed. Retrying... (${nextAttempt}/${maxRetries})`);
+          setIsRetrying(true);
 
-          // Wait 2 seconds before retry
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // Wait 2 seconds before retry (check abort and shouldStopAfterCurrent during wait)
+          try {
+            await new Promise((resolve, reject) => {
+              const timeout = setTimeout(resolve, 2000);
+              controller.signal.addEventListener('abort', () => {
+                clearTimeout(timeout);
+                reject(new Error('Aborted by user'));
+              });
+            });
+          } catch (abortErr) {
+            // Cleanup on abort during retry wait
+            setLoading(false);
+            abortControllerRef.current = null;
+            setIsRetrying(false);
+            setCurrentAttemptDisplay(0);
+            setTotalAttemptsDisplay(0);
+            return;
+          }
 
-          // Retry with incremented attempt count
-          setLoading(false);
+          // Check if user clicked Wait button during the wait period
+          if (shouldStopAfterCurrentRef.current) {
+            setLoading(false);
+            abortControllerRef.current = null;
+            setIsRetrying(false);
+            setCurrentAttemptDisplay(0);
+            setTotalAttemptsDisplay(0);
+            shouldStopAfterCurrentRef.current = false;
+            return;
+          }
+
+          // Retry with incremented attempt count (don't cleanup, continue with same controller)
           return handleRun(nextAttempt);
-        } else if (maxRetries === 0) {
-          // Show reminder if auto-retry is disabled
-          setError(`Prediction ${finalPred.status}.\n\n💡 Tip: Enable auto-retry in Settings to automatically retry failed predictions.`);
-        } else {
-          // Max retries reached
-          setError(`Prediction ${finalPred.status} after ${currentAttempt + 1} attempts.`);
         }
       }
 
       setPrediction(finalPred);
+
+      // Cleanup on successful completion
+      setLoading(false);
+      abortControllerRef.current = null;
+      setIsRetrying(false);
+      setCurrentAttemptDisplay(0);
+      setTotalAttemptsDisplay(0);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed';
 
-      // Auto retry on error
-      if (currentAttempt < maxRetries) {
+      // Set prediction with error for display in Output panel
+      setPrediction({
+        id: 'error',
+        status: 'failed',
+        error: errorMsg,
+        created_at: new Date().toISOString(),
+        model: `${model.owner}/${model.name}`,
+        input: formValues,
+        output: undefined,
+        metrics: undefined
+      });
+
+      // Auto retry on error (unless aborted)
+      if (errorMsg !== 'Aborted by user' && currentAttempt < maxRetries) {
         const nextAttempt = currentAttempt + 1;
-        setError(`${errorMsg} - Retrying... (${nextAttempt}/${maxRetries})`);
+        setIsRetrying(true);
 
-        // Wait 2 seconds before retry
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Wait 2 seconds before retry (check abort and shouldStopAfterCurrent during wait)
+        try {
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(resolve, 2000);
+            controller.signal.addEventListener('abort', () => {
+              clearTimeout(timeout);
+              reject(new Error('Aborted by user'));
+            });
+          });
+        } catch (abortErr) {
+          // Cleanup on abort during retry wait
+          setLoading(false);
+          abortControllerRef.current = null;
+          setIsRetrying(false);
+          setCurrentAttemptDisplay(0);
+          setTotalAttemptsDisplay(0);
+          return;
+        }
 
-        // Retry with incremented attempt count
-        setLoading(false);
+        // Check if user clicked Wait button during the wait period
+        if (shouldStopAfterCurrentRef.current) {
+          setLoading(false);
+          abortControllerRef.current = null;
+          setIsRetrying(false);
+          setCurrentAttemptDisplay(0);
+          setTotalAttemptsDisplay(0);
+          shouldStopAfterCurrentRef.current = false;
+          return;
+        }
+
+        // Retry with incremented attempt count (don't cleanup, continue with same controller)
         return handleRun(nextAttempt);
       }
 
-      // Show error with retry reminder if auto-retry is disabled
-      if (maxRetries === 0) {
-        setError(`${errorMsg}\n\n💡 Tip: Enable auto-retry in Settings to automatically retry failed predictions.`);
-      } else {
-        setError(`${errorMsg} after ${currentAttempt + 1} attempts.`);
-      }
-    } finally {
+      // Cleanup on error (not retrying)
       setLoading(false);
+      abortControllerRef.current = null;
+      setIsRetrying(false);
+      setCurrentAttemptDisplay(0);
+      setTotalAttemptsDisplay(0);
     }
   };
 
@@ -304,20 +474,6 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
                   <p className="text-sm text-neutral-500">Loading schema...</p>
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div className="m-4 p-4 bg-red-500/10 border border-red-500/30 rounded-xl">
-                <div className="flex gap-3">
-                  <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <div>
-                    <p className="text-sm font-medium text-red-400 mb-1">Error</p>
-                    <p className="text-sm text-red-300">{error}</p>
-                  </div>
                 </div>
               </div>
             )}
@@ -392,25 +548,36 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                     </div>
                   )}
 
+                  {loading ? (
+                    <div className="space-y-2">
+                      {/* Progress indicator - always show when loading */}
+                      <div className="text-center text-sm text-white/70">
+                        Attempt {currentAttemptDisplay} / {totalAttemptsDisplay}
+                        {isRetrying && ' (waiting to retry...)'}
+                      </div>
+                      <button
+                        onClick={handleStopClick}
+                        className="w-full px-6 py-4 bg-gradient-to-r from-red-600 to-orange-600 text-white font-semibold rounded-xl hover:from-red-500 hover:to-orange-500 transition-all shadow-lg shadow-red-500/20"
+                      >
+                        <span className="flex items-center justify-center gap-2">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                          Stop
+                        </span>
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleRun(0)}
+                      disabled={loadingSchema}
+                      className="w-full px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-xl hover:from-blue-500 hover:to-purple-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-500/20"
+                    >
+                      ▶ Run Model
+                    </button>
+                  )}
                   <button
-                    onClick={() => handleRun(0)}
-                    disabled={loading || loadingSchema}
-                    className="w-full px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-xl hover:from-blue-500 hover:to-purple-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-500/20"
-                  >
-                    {loading ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Running...
-                      </span>
-                    ) : (
-                      '▶ Run Model'
-                    )}
-                  </button>
-                  <button
-                    onClick={resetFormValues}
+                    onClick={handleResetClick}
                     disabled={loading || loadingSchema}
                     className="w-full px-4 py-2 bg-white/5 border border-white/10 text-white text-sm rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                   >
@@ -624,6 +791,94 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
             className="max-w-none max-h-none cursor-default rounded-xl shadow-2xl"
             style={{ maxWidth: 'calc(100vw - 64px)', maxHeight: 'calc(100vh - 56px - 64px)', objectFit: 'contain' }}
           />
+        </div>
+      )}
+
+      {/* Stop Confirmation Modal */}
+      {showStopConfirm && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={handleStopWait}
+        >
+          <div
+            className="bg-neutral-900 border border-white/20 rounded-2xl p-6 max-w-md mx-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-4 mb-6">
+              <div className="w-12 h-12 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
+                <svg className="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-white mb-2">Stop Prediction?</h3>
+                <p className="text-sm text-neutral-400 leading-relaxed">
+                  The prediction is currently running. Stopping now may still incur charges from Replicate API.
+                </p>
+                <ul className="mt-3 text-sm text-neutral-400 space-y-1">
+                  <li>• <strong className="text-white">Stop Now</strong>: Abort immediately</li>
+                  <li>• <strong className="text-white">Wait</strong>: Complete current attempt, then stop (no more retries)</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleStopConfirmed}
+                className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl transition-all"
+              >
+                Stop Now
+              </button>
+              <button
+                onClick={handleStopWait}
+                className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-all"
+              >
+                Wait
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Confirmation Modal */}
+      {showResetConfirm && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={handleResetCancelled}
+        >
+          <div
+            className="bg-neutral-900 border border-white/20 rounded-2xl p-6 max-w-md mx-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-4 mb-6">
+              <div className="w-12 h-12 rounded-full bg-orange-500/20 flex items-center justify-center flex-shrink-0">
+                <svg className="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-white mb-2">Reset to Default?</h3>
+                <p className="text-sm text-neutral-400 leading-relaxed">
+                  This will reset all form values to their default settings. Any unsaved changes will be lost.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleResetConfirmed}
+                className="flex-1 px-4 py-3 bg-orange-600 hover:bg-orange-700 text-white font-semibold rounded-xl transition-all"
+              >
+                Reset
+              </button>
+              <button
+                onClick={handleResetCancelled}
+                className="flex-1 px-4 py-3 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl transition-all border border-white/20"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
