@@ -145,4 +145,46 @@ export class ReplicateClient {
     const data = await response.json();
     return data.models || [];
   }
+
+  async getModelPricing(owner: string, name: string): Promise<string | null> {
+    try {
+      const url = `https://replicate.com/${owner}/${name}`;
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const html = await response.text();
+
+      // Try to find pricing in JSON data embedded in <script> tag
+      const scriptMatch = html.match(/<script[^>]*>(\{"billingConfig".*?\})<\/script>/);
+      if (scriptMatch) {
+        try {
+          const jsonData = JSON.parse(scriptMatch[1]);
+          const prices = jsonData.billingConfig?.current_tiers?.[0]?.prices?.[0];
+          if (prices) {
+            const mainPrice = `${prices.price} ${prices.title}`;
+            const additionalInfo = prices.description ? ` (${prices.description})` : '';
+            return mainPrice + additionalInfo;
+          }
+        } catch (e) {
+          // JSON parse failed, continue to fallback
+        }
+      }
+
+      // Fallback: Look for pricing text pattern in HTML
+      const pricingPattern = /\$[\d.]+\s+per\s+[^<]+(?:\s+or\s+around\s+\d+\s+images\s+for\s+\$1)?/i;
+      const match = html.match(pricingPattern);
+
+      if (match) {
+        return match[0].trim();
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Failed to fetch model pricing:', error);
+      return null;
+    }
+  }
 }

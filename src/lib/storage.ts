@@ -145,32 +145,29 @@ const saveResultElectron = async (result: Omit<SavedResult, 'id'>): Promise<stri
 
 // Save to IndexedDB (web version)
 const saveResultWeb = async (result: Omit<SavedResult, 'id'>): Promise<string> => {
-  const id = crypto.randomUUID();
+  const outputs = Array.isArray(result.output) ? result.output : [result.output];
+  const savedIds: string[] = [];
 
-  // Download and convert output URLs to local blobs
-  let processedOutput = result.output;
+  // Save each output as a separate record (like Electron does)
+  for (let i = 0; i < outputs.length; i++) {
+    const id = crypto.randomUUID();
+    let processedOutput = outputs[i];
 
-  if (Array.isArray(result.output)) {
-    // Multiple outputs
-    processedOutput = await Promise.all(
-      result.output.map(async (url) => {
-        if (typeof url === 'string' && url.startsWith('http')) {
-          return await downloadAsBlob(url);
-        }
-        return url;
-      })
-    );
-  } else if (typeof result.output === 'string' && result.output.startsWith('http')) {
-    // Single output URL
-    processedOutput = await downloadAsBlob(result.output);
+    // Download and convert URL to local blob
+    if (typeof processedOutput === 'string' && processedOutput.startsWith('http')) {
+      processedOutput = await downloadAsBlob(processedOutput);
+    }
+
+    await db!.results.add({
+      ...result,
+      output: processedOutput, // Single output per record
+      id
+    });
+    savedIds.push(id);
   }
 
-  await db!.results.add({
-    ...result,
-    output: processedOutput,
-    id
-  });
-  return id;
+  // Return first ID (for backward compatibility)
+  return savedIds[0] || crypto.randomUUID();
 };
 
 export const saveResult = async (result: Omit<SavedResult, 'id'>): Promise<string> => {
@@ -355,10 +352,10 @@ export const loadResultFile = async (filename: string): Promise<string | null> =
     return null;
   }
 
-  // For web version, get from IndexedDB (output is already stored)
+  // For web version, get from IndexedDB (output is already stored as single item)
   const result = await db!.results.get(filename);
   if (result && result.output) {
-    return Array.isArray(result.output) ? result.output[0] : result.output;
+    return typeof result.output === 'string' ? result.output : null;
   }
   return null;
 };

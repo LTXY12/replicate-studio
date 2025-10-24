@@ -35,6 +35,7 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const shouldStopAfterCurrentRef = useRef(false); // Use ref to access latest value in async callbacks
   const abortControllerRef = useRef<AbortController | null>(null); // Use ref to maintain same controller reference
+  const [pricing, setPricing] = useState<string | null>(null);
 
   const modelKey = `${model.owner}/${model.name}`;
 
@@ -107,14 +108,56 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     }
   };
 
-  const loadSchema = async () => {
+  const loadSchema = async (forceRefresh = false) => {
     if (!apiKey) return;
+
+    // Try to load from cache first (unless force refresh)
+    if (!forceRefresh) {
+      const cachedSchema = localStorage.getItem(`schema_${modelKey}`);
+      const cachedPricing = localStorage.getItem(`pricing_${modelKey}`);
+
+      if (cachedSchema) {
+        try {
+          const modelSchema = JSON.parse(cachedSchema);
+          setSchema(modelSchema);
+
+          // Load cached pricing
+          if (cachedPricing) {
+            setPricing(cachedPricing);
+          }
+
+          const properties = modelSchema.openapi_schema?.components?.schemas?.Input?.properties || {};
+          const defaults: { [key: string]: any } = {};
+          Object.keys(properties).forEach((key) => {
+            if (properties[key].default !== undefined) {
+              defaults[key] = properties[key].default;
+            }
+          });
+          setFormValues(defaults);
+          setLoadingSchema(false);
+          return;
+        } catch (e) {
+          // Cache invalid, continue to fetch
+        }
+      }
+    }
+
     setLoadingSchema(true);
 
     try {
       const client = new ReplicateClient(apiKey);
       const modelSchema = await client.getModelSchema(model.owner, model.name);
       setSchema(modelSchema);
+
+      // Cache the schema
+      localStorage.setItem(`schema_${modelKey}`, JSON.stringify(modelSchema));
+
+      // Fetch and cache pricing
+      const pricingInfo = await client.getModelPricing(model.owner, model.name);
+      if (pricingInfo) {
+        setPricing(pricingInfo);
+        localStorage.setItem(`pricing_${modelKey}`, pricingInfo);
+      }
 
       const properties = modelSchema.openapi_schema?.components?.schemas?.Input?.properties || {};
       const defaults: { [key: string]: any } = {};
@@ -457,13 +500,23 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
         <div className="h-full flex gap-6">
           {/* Parameters Panel */}
           <div className="w-96 flex flex-col flex-shrink-0 bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/10">
+            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <h3 className="font-semibold text-white flex items-center gap-2">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                 </svg>
                 Parameters
               </h3>
+              <button
+                onClick={() => loadSchema(true)}
+                disabled={loadingSchema}
+                className="p-2 hover:bg-white/10 rounded-lg transition-all disabled:opacity-50"
+                title="Refresh schema"
+              >
+                <svg className={`w-4 h-4 text-white ${loadingSchema ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
             </div>
 
             {loadingSchema && (
@@ -568,13 +621,21 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                       </button>
                     </div>
                   ) : (
-                    <button
-                      onClick={() => handleRun(0)}
-                      disabled={loadingSchema}
-                      className="w-full px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-xl hover:from-blue-500 hover:to-purple-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-500/20"
-                    >
-                      ▶ Run Model
-                    </button>
+                    <div className="space-y-2">
+                      {pricing && (
+                        <div className="text-center py-2 px-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
+                          <div className="text-xs text-emerald-300/70">Pricing</div>
+                          <div className="text-sm font-semibold text-emerald-300">{pricing}</div>
+                        </div>
+                      )}
+                      <button
+                        onClick={() => handleRun(0)}
+                        disabled={loadingSchema}
+                        className="w-full px-6 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-xl hover:from-blue-500 hover:to-purple-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-500/20"
+                      >
+                        ▶ Run Model
+                      </button>
+                    </div>
                   )}
                   <button
                     onClick={handleResetClick}

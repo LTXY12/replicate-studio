@@ -236,14 +236,68 @@ export function DynamicForm({ schema, values, onChange }: DynamicFormProps) {
 
     if (prop.type === 'string') {
       if (key === 'prompt' || prop.description?.toLowerCase().includes('prompt')) {
+        // Parse templates
+        const templatesText = localStorage.getItem('prompt_templates') || '';
+        const parseTemplates = (text: string): { name: string; content: string }[] => {
+          const result: { name: string; content: string }[] = [];
+          const lines = text.split('\n');
+          let currentName = '';
+          let currentContent = '';
+          let inContent = false;
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.endsWith('{') && !inContent) {
+              if (currentName && currentContent) {
+                result.push({ name: currentName, content: currentContent.trim() });
+              }
+              currentName = trimmed.substring(0, trimmed.length - 1).trim();
+              currentContent = '';
+              inContent = true;
+            } else if (trimmed === '}' && inContent) {
+              inContent = false;
+            } else if (inContent) {
+              currentContent += line + '\n';
+            }
+          }
+          if (currentName && currentContent) {
+            result.push({ name: currentName, content: currentContent.trim() });
+          }
+          return result;
+        };
+
+        const templates = parseTemplates(templatesText);
+
         return (
-          <textarea
-            value={value || ''}
-            onChange={(e) => handleChange(key, e.target.value)}
-            rows={5}
-            className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all resize-y min-h-[120px]"
-            placeholder="Describe what you want to create..."
-          />
+          <div className="space-y-2">
+            {templates.length > 0 && (
+              <select
+                onChange={(e) => {
+                  if (e.target.value) {
+                    const template = templates.find(t => t.name === e.target.value);
+                    if (template) {
+                      handleChange(key, template.content);
+                    }
+                  }
+                }}
+                className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all"
+              >
+                <option value="" className="bg-neutral-900">📋 Select template...</option>
+                {templates.map((template, idx) => (
+                  <option key={idx} value={template.name} className="bg-neutral-900">
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <textarea
+              value={value || ''}
+              onChange={(e) => handleChange(key, e.target.value)}
+              rows={5}
+              className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all resize-y min-h-[120px]"
+              placeholder="Describe what you want to create..."
+            />
+          </div>
         );
       }
 
