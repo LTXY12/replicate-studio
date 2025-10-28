@@ -86,7 +86,6 @@ export function ModelSelector({ onSelectModel }: ModelSelectorProps) {
 
       // Process text-to-image models
       textToImage.forEach((model: any) => {
-        // Check if model already exists
         const exists = allModels.some(m => m.owner === model.owner && m.name === model.name);
         if (!exists) {
           allModels.push({

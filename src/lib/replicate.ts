@@ -174,6 +174,7 @@ export class ReplicateClient {
       }
 
       // Fallback: Look for pricing text pattern in HTML
+      // Match per-second pricing or other pricing patterns
       const pricingPattern = /\$[\d.]+\s+per\s+[^<]+(?:\s+or\s+around\s+\d+\s+images\s+for\s+\$1)?/i;
       const match = html.match(pricingPattern);
 

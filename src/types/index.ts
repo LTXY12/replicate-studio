@@ -5,6 +5,7 @@ export interface ReplicateModel {
   runs: string;
   category: 'image' | 'video' | 'edit';
   version?: string;
+  pricing?: string;
 }
 
 export interface ModelSchema {

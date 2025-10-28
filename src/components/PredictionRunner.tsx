@@ -152,7 +152,7 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
       // Cache the schema
       localStorage.setItem(`schema_${modelKey}`, JSON.stringify(modelSchema));
 
-      // Fetch and cache pricing
+      // Fetch and cache pricing from HTML
       const pricingInfo = await client.getModelPricing(model.owner, model.name);
       if (pricingInfo) {
         setPricing(pricingInfo);

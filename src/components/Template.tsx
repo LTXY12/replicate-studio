@@ -32,6 +32,8 @@ export function Template() {
   const [newItemName, setNewItemName] = useState('');
   const [newItemContent, setNewItemContent] = useState('');
   const [draggedGroupIndex, setDraggedGroupIndex] = useState<number | null>(null);
+  const [draggedItemIndex, setDraggedItemIndex] = useState<number | null>(null);
+  const [isAddingNewItem, setIsAddingNewItem] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('prompt_template_groups', JSON.stringify(groups));
@@ -79,6 +81,20 @@ export function Template() {
 
     setNewItemName('');
     setNewItemContent('');
+    setIsAddingNewItem(false);
+  };
+
+  const startAddingItem = () => {
+    setEditingItem(null);
+    setNewItemName('');
+    setNewItemContent('');
+    setIsAddingNewItem(true);
+  };
+
+  const cancelAddingItem = () => {
+    setNewItemName('');
+    setNewItemContent('');
+    setIsAddingNewItem(false);
   };
 
   const deleteItem = (groupId: string, itemId: string) => {
@@ -116,6 +132,34 @@ export function Template() {
 
   const handleGroupDragEnd = () => {
     setDraggedGroupIndex(null);
+  };
+
+  const handleItemDragStart = (index: number) => {
+    setDraggedItemIndex(index);
+  };
+
+  const handleItemDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedItemIndex === null || !selectedGroupId) return;
+
+    const groupIndex = groups.findIndex(g => g.id === selectedGroupId);
+    if (groupIndex === -1) return;
+
+    const items = [...groups[groupIndex].items];
+    if (draggedItemIndex === index) return;
+
+    const draggedItem = items[draggedItemIndex];
+    items.splice(draggedItemIndex, 1);
+    items.splice(index, 0, draggedItem);
+
+    const newGroups = [...groups];
+    newGroups[groupIndex] = { ...newGroups[groupIndex], items };
+    setGroups(newGroups);
+    setDraggedItemIndex(index);
+  };
+
+  const handleItemDragEnd = () => {
+    setDraggedItemIndex(null);
   };
 
   const selectedGroup = groups.find(g => g.id === selectedGroupId);
@@ -302,6 +346,15 @@ export function Template() {
                 </div>
                 <div className="flex items-center gap-1">
                   <button
+                    onClick={startAddingItem}
+                    className="p-1.5 hover:bg-green-500/20 rounded transition-all"
+                    title="Add new item"
+                  >
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </button>
+                  <button
                     onClick={() => setEditingGroup(selectedGroup.id)}
                     className="p-1.5 hover:bg-white/10 rounded transition-all"
                     title="Rename group"
@@ -323,15 +376,22 @@ export function Template() {
               </div>
 
               <div className="flex-1 overflow-auto p-4 space-y-2">
-                {selectedGroup.items.map(item => (
+                {selectedGroup.items.map((item, index) => (
                   <div
                     key={item.id}
-                    onClick={() => setEditingItem(item.id)}
-                    className={`p-3 rounded-lg cursor-pointer transition-all ${
+                    draggable
+                    onDragStart={() => handleItemDragStart(index)}
+                    onDragOver={(e) => handleItemDragOver(e, index)}
+                    onDragEnd={handleItemDragEnd}
+                    onClick={() => {
+                      setEditingItem(item.id);
+                      setIsAddingNewItem(false);
+                    }}
+                    className={`p-3 rounded-lg cursor-move transition-all ${
                       editingItem === item.id
                         ? 'bg-purple-600/20 border border-purple-400/50'
                         : 'bg-white/5 border border-white/10 hover:bg-white/10'
-                    }`}
+                    } ${draggedItemIndex === index ? 'opacity-50' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <h4 className="font-semibold text-white text-sm">{item.name}</h4>
@@ -363,16 +423,17 @@ export function Template() {
               </div>
             </div>
 
-            {/* Item Editor */}
-            <div className="flex-1 flex flex-col bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl overflow-hidden">
-              <div className="px-5 py-4 border-b border-white/10">
-                <h3 className="font-semibold text-white">
-                  {editingItem ? 'Edit Item' : 'Add New Item'}
-                </h3>
-                <p className="text-xs text-neutral-400 mt-1">
-                  {editingItem ? 'Modify the selected template item' : 'Create a new template item for this group'}
-                </p>
-              </div>
+            {/* Item Editor - Only show when editing or adding */}
+            {(editingItem || isAddingNewItem) && (
+              <div className="flex-1 flex flex-col bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-white/10">
+                  <h3 className="font-semibold text-white">
+                    {editingItem ? 'Edit Item' : 'Add New Item'}
+                  </h3>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    {editingItem ? 'Modify the selected template item' : 'Create a new template item for this group'}
+                  </p>
+                </div>
 
               <div className="flex-1 overflow-auto p-5 space-y-4">
                 <div>
@@ -427,19 +488,17 @@ export function Template() {
                         Add Item
                       </button>
                       <button
-                        onClick={() => {
-                          setNewItemName('');
-                          setNewItemContent('');
-                        }}
+                        onClick={cancelAddingItem}
                         className="px-4 py-3 bg-white/10 border border-white/20 rounded-xl hover:bg-white/15 transition-all text-sm font-medium"
                       >
-                        Clear
+                        Cancel
                       </button>
                     </>
                   )}
                 </div>
               </div>
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>

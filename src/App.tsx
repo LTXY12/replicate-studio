@@ -5,9 +5,10 @@ import { ModelSelector } from './components/ModelSelector';
 import { PredictionRunner } from './components/PredictionRunner';
 import { Gallery } from './components/Gallery';
 import { Template } from './components/Template';
+import { MediaLibrary } from './components/MediaLibrary';
 import type { ReplicateModel } from './types';
 
-type View = 'models' | 'runner' | 'gallery' | 'template';
+type View = 'models' | 'runner' | 'gallery' | 'template' | 'media';
 
 function App() {
   const { apiKey } = useApiKey();
@@ -104,6 +105,22 @@ function App() {
             </svg>
             <span>Template</span>
           </button>
+          <button
+            onClick={() => {
+              setSelectedModel(null);
+              setView('media');
+            }}
+            className={`px-4 py-1.5 text-sm rounded-lg transition-all flex items-center gap-2 ${
+              view === 'media'
+                ? 'bg-white/20 text-white font-semibold'
+                : 'text-neutral-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+            </svg>
+            <span>Media</span>
+          </button>
 
           <div className="w-px h-6 bg-white/20 mx-2" />
 
@@ -145,6 +162,8 @@ function App() {
         {view === 'gallery' && <Gallery />}
 
         {view === 'template' && <Template />}
+
+        {view === 'media' && <MediaLibrary />}
       </main>
     </div>
   );

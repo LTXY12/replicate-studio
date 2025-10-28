@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { SchemaProperty } from '../types';
 
 interface TemplateItem {
@@ -19,6 +20,19 @@ interface SelectedTemplate {
   groupName: string;
   itemName: string;
   content: string;
+}
+
+interface MediaItem {
+  id: string;
+  name: string;
+  dataUrl: string;
+  type: 'image' | 'video';
+}
+
+interface MediaGroup {
+  id: string;
+  name: string;
+  items: MediaItem[];
 }
 
 interface DynamicFormProps {
@@ -347,7 +361,19 @@ function PromptFieldWithTemplates({ value, groups, onChange, modelKey }: PromptF
 }
 
 export function DynamicForm({ schema, values, onChange, modelKey = '' }: DynamicFormProps) {
-  const [formData, setFormData] = useState<{ [key: string]: any }>(values);
+  const [formData, setFormData] = useState<{ [key: string]: any}>(values);
+  const [mediaGroups] = useState<MediaGroup[]>(() => {
+    const stored = localStorage.getItem('media_library_groups');
+    return stored ? JSON.parse(stored) : [];
+  });
+  const [showMediaModal, setShowMediaModal] = useState(false);
+  const [currentFieldKey, setCurrentFieldKey] = useState<string>('');
+  const [isMultiSelect, setIsMultiSelect] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('');
+  const [selectedMediaIds, setSelectedMediaIds] = useState<Set<string>>(new Set());
+  const [previewMedia, setPreviewMedia] = useState<string | null>(null);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [draggedFieldKey, setDraggedFieldKey] = useState<string>('');
 
   useEffect(() => {
     setFormData(values);
@@ -357,6 +383,60 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
     const newData = { ...formData, [key]: value };
     setFormData(newData);
     onChange(newData);
+  };
+
+  const openMediaSelector = (fieldKey: string, multi: boolean) => {
+    setCurrentFieldKey(fieldKey);
+    setIsMultiSelect(multi);
+    setSelectedGroupId('');
+    setSelectedMediaIds(new Set());
+    setShowMediaModal(true);
+  };
+
+  const applyMedia = () => {
+    const group = mediaGroups.find(g => g.id === selectedGroupId);
+    if (!group) return;
+
+    const selectedMedia = group.items.filter(item => selectedMediaIds.has(item.id));
+
+    if (isMultiSelect) {
+      // Array field - append to existing
+      const current = Array.isArray(formData[currentFieldKey]) ? formData[currentFieldKey] : [];
+      const newValues = [...current, ...selectedMedia.map(m => m.dataUrl)];
+      handleChange(currentFieldKey, newValues);
+    } else {
+      // Single field - replace
+      if (selectedMedia.length > 0) {
+        handleChange(currentFieldKey, selectedMedia[0].dataUrl);
+      }
+    }
+
+    setShowMediaModal(false);
+  };
+
+  const handleDragStart = (fieldKey: string, index: number) => {
+    setDraggedIndex(index);
+    setDraggedFieldKey(fieldKey);
+  };
+
+  const handleDragOver = (e: React.DragEvent, fieldKey: string, index: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedFieldKey !== fieldKey) return;
+
+    const items = Array.isArray(formData[fieldKey]) ? [...formData[fieldKey]] : [];
+    if (draggedIndex === index) return;
+
+    const draggedItem = items[draggedIndex];
+    items.splice(draggedIndex, 1);
+    items.splice(index, 0, draggedItem);
+
+    handleChange(fieldKey, items);
+    setDraggedIndex(index);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
+    setDraggedFieldKey('');
   };
 
   const renderField = (key: string, prop: SchemaProperty) => {
@@ -424,24 +504,52 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
       const uploadedFiles = Array.isArray(value) ? value : [];
       return (
         <div className="space-y-3">
+          {/* Media Library Button */}
+          <button
+            type="button"
+            onClick={() => openMediaSelector(key, true)}
+            className="w-full px-4 py-2.5 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/50 hover:border-purple-500 rounded-lg text-sm font-medium text-purple-300 hover:text-purple-200 transition-all flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+            </svg>
+            Select from Media Library
+          </button>
+
           {uploadedFiles.length > 0 && (
             <div className="grid grid-cols-2 gap-3">
               {uploadedFiles.map((file, index) => (
-                <div key={index} className="relative group">
-                  <div className="border-2 border-white/20 rounded-lg overflow-hidden">
+                <div
+                  key={index}
+                  draggable
+                  onDragStart={() => handleDragStart(key, index)}
+                  onDragOver={(e) => handleDragOver(e, key, index)}
+                  onDragEnd={handleDragEnd}
+                  className={`relative group ${draggedIndex === index && draggedFieldKey === key ? 'opacity-50' : ''}`}
+                >
+                  <div className="absolute top-1 left-1 p-1 bg-white/10 rounded cursor-move z-10">
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
+                    </svg>
+                  </div>
+                  <div
+                    className="border-2 border-white/20 rounded-lg overflow-hidden cursor-pointer hover:border-white/40 transition-all"
+                    onClick={() => setPreviewMedia(file)}
+                  >
                     {file.startsWith('data:video') ? (
-                      <video src={file} className="w-full h-32 object-cover bg-black" controls />
+                      <video src={file} className="w-full h-32 object-contain bg-black" />
                     ) : (
-                      <img src={file} alt={`Uploaded ${index + 1}`} className="w-full h-32 object-cover bg-black" />
+                      <img src={file} alt={`Uploaded ${index + 1}`} className="w-full h-32 object-contain bg-black" />
                     )}
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       const newFiles = uploadedFiles.filter((_, i) => i !== index);
                       handleChange(key, newFiles);
                     }}
-                    className="absolute top-2 right-2 p-1.5 bg-red-600 hover:bg-red-700 rounded-lg text-white text-xs font-medium transition-all opacity-0 group-hover:opacity-100"
+                    className="absolute top-2 right-2 p-1.5 bg-red-600 hover:bg-red-700 rounded-lg text-white text-xs font-medium transition-all opacity-0 group-hover:opacity-100 z-10"
                   >
                     ×
                   </button>
@@ -500,23 +608,41 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
       const isDataUrl = value && value.startsWith && value.startsWith('data:');
       return (
         <div className="space-y-3">
+          {/* Media Library Button */}
+          <button
+            type="button"
+            onClick={() => openMediaSelector(key, false)}
+            className="w-full px-4 py-2.5 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/50 hover:border-purple-500 rounded-lg text-sm font-medium text-purple-300 hover:text-purple-200 transition-all flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+            </svg>
+            Select from Media Library
+          </button>
+
           {isDataUrl ? (
             <div className="relative group">
-              <div className="border-2 border-white/20 rounded-lg overflow-hidden">
+              <div
+                className="border-2 border-white/20 rounded-lg overflow-hidden cursor-pointer hover:border-white/40 transition-all"
+                onClick={() => setPreviewMedia(value)}
+              >
                 {value.startsWith('data:video') ? (
-                  <video src={value} className="w-full max-h-48 object-contain bg-black" controls />
+                  <video src={value} className="w-full max-h-48 object-contain bg-black" />
                 ) : (
                   <img src={value} alt="Uploaded" className="w-full max-h-48 object-contain bg-black" />
                 )}
               </div>
               <button
                 type="button"
-                onClick={() => handleChange(key, '')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleChange(key, '');
+                }}
                 className="absolute top-2 right-2 p-2 bg-red-600 hover:bg-red-700 rounded-lg text-white text-xs font-medium transition-all opacity-0 group-hover:opacity-100"
               >
                 Remove
               </button>
-              <p className="text-xs text-neutral-500 mt-2 text-center">✓ File uploaded</p>
+              <p className="text-xs text-neutral-500 mt-2 text-center">✓ File uploaded (Click to preview)</p>
             </div>
           ) : (
             <>
@@ -620,24 +746,184 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
     return orderA - orderB;
   });
 
+  const selectedGroup = mediaGroups.find(g => g.id === selectedGroupId);
+
   return (
-    <div className="space-y-5">
-      {sortedKeys.map((key) => {
-        const prop = schema[key];
-        return (
-          <div key={key} className="group">
-            <label className="block text-sm font-semibold text-white mb-2">
-              {prop.title || key}
-            </label>
-            {prop.description && (
-              <p className="text-xs text-neutral-500 mb-3 leading-relaxed">
-                {prop.description}
-              </p>
-            )}
-            {renderField(key, prop)}
+    <>
+      <div className="space-y-5">
+        {sortedKeys.map((key) => {
+          const prop = schema[key];
+          return (
+            <div key={key} className="group">
+              <label className="block text-sm font-semibold text-white mb-2">
+                {prop.title || key}
+              </label>
+              {prop.description && (
+                <p className="text-xs text-neutral-500 mb-3 leading-relaxed">
+                  {prop.description}
+                </p>
+              )}
+              {renderField(key, prop)}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Media Selection Modal */}
+      {showMediaModal && createPortal(
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4" onClick={() => setShowMediaModal(false)}>
+          <div className="bg-gradient-to-br from-neutral-900 to-neutral-950 border border-white/20 rounded-2xl w-[90vw] h-[90vh] overflow-hidden shadow-2xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-white/10">
+              <div>
+                <h3 className="text-xl font-bold text-white">Select from Media Library</h3>
+                <p className="text-sm text-neutral-400 mt-1">
+                  {isMultiSelect ? 'Select multiple media files' : 'Select one media file'}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowMediaModal(false)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-all"
+              >
+                <svg className="w-6 h-6 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Group Selector */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-white mb-2">Select Group</label>
+                <select
+                  value={selectedGroupId}
+                  onChange={(e) => {
+                    setSelectedGroupId(e.target.value);
+                    setSelectedMediaIds(new Set());
+                  }}
+                  className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-purple-400 transition-all"
+                >
+                  <option value="" className="bg-neutral-900">Select a group...</option>
+                  {mediaGroups.map(group => (
+                    <option key={group.id} value={group.id} className="bg-neutral-900">
+                      {group.name} ({group.items.length} items)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Media Grid */}
+              {selectedGroup && selectedGroup.items.length > 0 ? (
+                <div>
+                  <label className="block text-sm font-semibold text-white mb-3">
+                    Select Media {isMultiSelect && `(${selectedMediaIds.size} selected)`}
+                  </label>
+                  <div className="grid grid-cols-4 gap-6">
+                    {selectedGroup.items.map(item => {
+                      const isSelected = selectedMediaIds.has(item.id);
+                      return (
+                        <div
+                          key={item.id}
+                          onClick={() => {
+                            const newSet = new Set(selectedMediaIds);
+                            if (isMultiSelect) {
+                              if (isSelected) {
+                                newSet.delete(item.id);
+                              } else {
+                                newSet.add(item.id);
+                              }
+                            } else {
+                              newSet.clear();
+                              newSet.add(item.id);
+                            }
+                            setSelectedMediaIds(newSet);
+                          }}
+                          className={`cursor-pointer rounded-xl overflow-hidden border-2 transition-all ${
+                            isSelected ? 'border-purple-500 ring-2 ring-purple-500/50' : 'border-white/20 hover:border-white/40'
+                          }`}
+                        >
+                          <div className="aspect-video bg-black relative">
+                            {item.type === 'video' ? (
+                              <video src={item.dataUrl} className="w-full h-full object-contain" />
+                            ) : (
+                              <img src={item.dataUrl} alt={item.name} className="w-full h-full object-contain" />
+                            )}
+                            {isSelected && (
+                              <div className="absolute top-2 right-2 w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center">
+                                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              </div>
+                            )}
+                          </div>
+                          <div className="p-2 bg-black/50">
+                            <p className="text-xs text-white truncate">{item.name}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : selectedGroup ? (
+                <div className="text-center py-12 text-neutral-500">
+                  <p>No media in this group</p>
+                </div>
+              ) : (
+                <div className="text-center py-12 text-neutral-500">
+                  <p>Please select a group first</p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex-shrink-0 flex items-center justify-end gap-3 p-6 border-t border-white/10">
+              <button
+                onClick={() => setShowMediaModal(false)}
+                className="px-6 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-medium text-white transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={applyMedia}
+                disabled={selectedMediaIds.size === 0}
+                className="px-6 py-2.5 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 rounded-lg text-sm font-medium text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Apply ({selectedMediaIds.size})
+              </button>
+            </div>
           </div>
-        );
-      })}
-    </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Image/Video Preview Modal */}
+      {previewMedia && createPortal(
+        <div
+          className="fixed bg-black/95 backdrop-blur-sm flex flex-col z-50"
+          style={{ top: '56px', left: 0, right: 0, bottom: 0 }}
+          onClick={() => setPreviewMedia(null)}
+        >
+          <div className="flex justify-end p-4 flex-shrink-0">
+            <button
+              onClick={() => setPreviewMedia(null)}
+              className="p-3 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
+            >
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div className="flex-1 flex items-center justify-center px-4 pb-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            {previewMedia.startsWith('data:video') ? (
+              <video src={previewMedia} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} className="object-contain" controls autoPlay />
+            ) : (
+              <img src={previewMedia} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} className="object-contain" />
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
