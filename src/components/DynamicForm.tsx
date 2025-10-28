@@ -1,13 +1,241 @@
 import { useState, useEffect } from 'react';
 import type { SchemaProperty } from '../types';
 
+interface TemplateItem {
+  id: string;
+  name: string;
+  content: string;
+}
+
+interface TemplateGroup {
+  id: string;
+  name: string;
+  items: TemplateItem[];
+}
+
+interface SelectedTemplate {
+  groupId: string;
+  itemId: string;
+  groupName: string;
+  itemName: string;
+  content: string;
+}
+
 interface DynamicFormProps {
   schema: { [key: string]: SchemaProperty };
   values: { [key: string]: any };
   onChange: (values: { [key: string]: any }) => void;
+  modelKey?: string;
 }
 
-export function DynamicForm({ schema, values, onChange }: DynamicFormProps) {
+interface PromptFieldWithTemplatesProps {
+  value: string;
+  groups: TemplateGroup[];
+  onChange: (value: string) => void;
+  modelKey: string;
+}
+
+function PromptFieldWithTemplates({ value, groups, onChange, modelKey }: PromptFieldWithTemplatesProps) {
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('');
+  const [selectedItemId, setSelectedItemId] = useState<string>('');
+  const [selectedTemplates, setSelectedTemplates] = useState<SelectedTemplate[]>(() => {
+    // Load saved selected templates for this model
+    const saved = localStorage.getItem(`selected_templates_${modelKey}`);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+  const [draggedTemplateIndex, setDraggedTemplateIndex] = useState<number | null>(null);
+
+  const selectedGroup = groups.find(g => g.id === selectedGroupId);
+
+  // Save selected templates whenever they change
+  useEffect(() => {
+    localStorage.setItem(`selected_templates_${modelKey}`, JSON.stringify(selectedTemplates));
+  }, [selectedTemplates, modelKey]);
+
+  const addTemplate = () => {
+    if (!selectedGroupId || !selectedItemId) return;
+
+    const group = groups.find(g => g.id === selectedGroupId);
+    const item = group?.items.find(i => i.id === selectedItemId);
+
+    if (!group || !item) return;
+
+    const newTemplate: SelectedTemplate = {
+      groupId: group.id,
+      itemId: item.id,
+      groupName: group.name,
+      itemName: item.name,
+      content: item.content
+    };
+
+    setSelectedTemplates([...selectedTemplates, newTemplate]);
+    setSelectedGroupId('');
+    setSelectedItemId('');
+  };
+
+  const removeTemplate = (index: number) => {
+    setSelectedTemplates(selectedTemplates.filter((_, i) => i !== index));
+  };
+
+  const applyTemplates = () => {
+    const combined = selectedTemplates.map(t => t.content).join('\n\n');
+    onChange(combined);
+  };
+
+  const clearAll = () => {
+    setSelectedTemplates([]);
+    onChange('');
+  };
+
+  const handleTemplateDragStart = (index: number) => {
+    setDraggedTemplateIndex(index);
+  };
+
+  const handleTemplateDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedTemplateIndex === null || draggedTemplateIndex === index) return;
+
+    const newTemplates = [...selectedTemplates];
+    const draggedTemplate = newTemplates[draggedTemplateIndex];
+    newTemplates.splice(draggedTemplateIndex, 1);
+    newTemplates.splice(index, 0, draggedTemplate);
+
+    setSelectedTemplates(newTemplates);
+    setDraggedTemplateIndex(index);
+  };
+
+  const handleTemplateDragEnd = () => {
+    setDraggedTemplateIndex(null);
+  };
+
+  return (
+    <div className="space-y-3">
+      {groups.length > 0 && (
+        <div className="space-y-3">
+          {/* Template Selector */}
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedGroupId}
+              onChange={(e) => {
+                setSelectedGroupId(e.target.value);
+                setSelectedItemId('');
+              }}
+              className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-purple-400 focus:bg-white/10 transition-all"
+            >
+              <option value="" className="bg-neutral-900">Select group...</option>
+              {groups.map(group => (
+                <option key={group.id} value={group.id} className="bg-neutral-900">
+                  {group.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedItemId}
+              onChange={(e) => setSelectedItemId(e.target.value)}
+              disabled={!selectedGroupId}
+              className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-purple-400 focus:bg-white/10 transition-all disabled:opacity-50"
+            >
+              <option value="" className="bg-neutral-900">Select template...</option>
+              {selectedGroup?.items.map(item => (
+                <option key={item.id} value={item.id} className="bg-neutral-900">
+                  {item.name}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={addTemplate}
+              disabled={!selectedGroupId || !selectedItemId}
+              className="p-2 bg-purple-600 hover:bg-purple-500 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Add template"
+            >
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Selected Templates List */}
+          {selectedTemplates.length > 0 && (
+            <div className="p-3 bg-white/5 border border-white/10 rounded-lg space-y-2">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-neutral-400">
+                  Selected Templates ({selectedTemplates.length})
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={applyTemplates}
+                    className="px-3 py-1 bg-green-600 hover:bg-green-500 rounded text-xs font-medium text-white transition-all"
+                  >
+                    Apply to Prompt
+                  </button>
+                  <button
+                    onClick={clearAll}
+                    className="px-3 py-1 bg-red-600 hover:bg-red-500 rounded text-xs font-medium text-white transition-all"
+                  >
+                    Clear All
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                {selectedTemplates.map((template, index) => (
+                  <div
+                    key={index}
+                    draggable
+                    onDragStart={() => handleTemplateDragStart(index)}
+                    onDragOver={(e) => handleTemplateDragOver(e, index)}
+                    onDragEnd={handleTemplateDragEnd}
+                    className={`flex items-center justify-between p-2 bg-white/5 border border-white/10 rounded cursor-move transition-all ${
+                      draggedTemplateIndex === index ? 'opacity-50' : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <svg className="w-4 h-4 text-neutral-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
+                      </svg>
+                      <span className="text-xs font-mono text-neutral-500">{index + 1}.</span>
+                      <span className="text-xs font-semibold text-purple-400">{template.groupName}</span>
+                      <span className="text-xs text-neutral-500">→</span>
+                      <span className="text-xs text-white truncate">{template.itemName}</span>
+                    </div>
+                    <button
+                      onClick={() => removeTemplate(index)}
+                      className="p-1 hover:bg-red-500/20 rounded transition-all flex-shrink-0"
+                      title="Remove"
+                    >
+                      <svg className="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Textarea */}
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={5}
+        className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all resize-y min-h-[120px]"
+        placeholder="Describe what you want to create..."
+      />
+    </div>
+  );
+}
+
+export function DynamicForm({ schema, values, onChange, modelKey = '' }: DynamicFormProps) {
   const [formData, setFormData] = useState<{ [key: string]: any }>(values);
 
   useEffect(() => {
@@ -236,68 +464,28 @@ export function DynamicForm({ schema, values, onChange }: DynamicFormProps) {
 
     if (prop.type === 'string') {
       if (key === 'prompt' || prop.description?.toLowerCase().includes('prompt')) {
-        // Parse templates
-        const templatesText = localStorage.getItem('prompt_templates') || '';
-        const parseTemplates = (text: string): { name: string; content: string }[] => {
-          const result: { name: string; content: string }[] = [];
-          const lines = text.split('\n');
-          let currentName = '';
-          let currentContent = '';
-          let inContent = false;
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.endsWith('{') && !inContent) {
-              if (currentName && currentContent) {
-                result.push({ name: currentName, content: currentContent.trim() });
-              }
-              currentName = trimmed.substring(0, trimmed.length - 1).trim();
-              currentContent = '';
-              inContent = true;
-            } else if (trimmed === '}' && inContent) {
-              inContent = false;
-            } else if (inContent) {
-              currentContent += line + '\n';
+        // Load template groups from new structure
+        const loadTemplateGroups = (): TemplateGroup[] => {
+          const saved = localStorage.getItem('prompt_template_groups');
+          if (saved) {
+            try {
+              return JSON.parse(saved);
+            } catch {
+              return [];
             }
           }
-          if (currentName && currentContent) {
-            result.push({ name: currentName, content: currentContent.trim() });
-          }
-          return result;
+          return [];
         };
 
-        const templates = parseTemplates(templatesText);
+        const groups = loadTemplateGroups();
 
         return (
-          <div className="space-y-2">
-            {templates.length > 0 && (
-              <select
-                onChange={(e) => {
-                  if (e.target.value) {
-                    const template = templates.find(t => t.name === e.target.value);
-                    if (template) {
-                      handleChange(key, template.content);
-                    }
-                  }
-                }}
-                className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all"
-              >
-                <option value="" className="bg-neutral-900">📋 Select template...</option>
-                {templates.map((template, idx) => (
-                  <option key={idx} value={template.name} className="bg-neutral-900">
-                    {template.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <textarea
-              value={value || ''}
-              onChange={(e) => handleChange(key, e.target.value)}
-              rows={5}
-              className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-white/30 focus:bg-white/10 transition-all resize-y min-h-[120px]"
-              placeholder="Describe what you want to create..."
-            />
-          </div>
+          <PromptFieldWithTemplates
+            value={value || ''}
+            groups={groups}
+            onChange={(newValue) => handleChange(key, newValue)}
+            modelKey={modelKey}
+          />
         );
       }
 

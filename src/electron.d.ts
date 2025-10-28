@@ -16,6 +16,8 @@ export interface ElectronAPI {
     selectDownloadPath: () => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>;
     getMaxResults: () => Promise<{ success: boolean; value?: number; error?: string }>;
     setMaxResults: (value: number) => Promise<{ success: boolean; value?: number; error?: string }>;
+    exportTemplates: (templatesData: any) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>;
+    importTemplates: () => Promise<{ success: boolean; data?: any; canceled?: boolean; error?: string }>;
   };
 }
 

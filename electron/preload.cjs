@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('electron', {
     selectInputFile: () => ipcRenderer.invoke('fs:selectInputFile'),
     selectDownloadPath: () => ipcRenderer.invoke('fs:selectDownloadPath'),
     getMaxResults: () => ipcRenderer.invoke('fs:getMaxResults'),
-    setMaxResults: (value) => ipcRenderer.invoke('fs:setMaxResults', value)
+    setMaxResults: (value) => ipcRenderer.invoke('fs:setMaxResults', value),
+    exportTemplates: (templatesData) => ipcRenderer.invoke('fs:exportTemplates', templatesData),
+    importTemplates: () => ipcRenderer.invoke('fs:importTemplates')
   }
 });

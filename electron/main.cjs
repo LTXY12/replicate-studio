@@ -69,10 +69,10 @@ function saveSettings(newSettings) {
 }
 
 function getStoragePath() {
+  // If storagePath is not set, initialize from settings (shouldn't happen after createWindow)
   if (!storagePath) {
     const settings = getSettings();
     storagePath = settings.storagePath || getDefaultStoragePath();
-    maxResults = settings.maxResults !== undefined ? settings.maxResults : 200;
   }
 
   // Ensure directory exists
@@ -107,6 +107,13 @@ function setMaxResults(value) {
 }
 
 function createWindow() {
+  // Load settings on app start
+  const settings = getSettings();
+  storagePath = settings.storagePath || getDefaultStoragePath();
+  maxResults = settings.maxResults !== undefined ? settings.maxResults : 200;
+  lastInputPath = settings.lastInputPath || null;
+  lastDownloadPath = settings.lastDownloadPath || null;
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -356,6 +363,9 @@ ipcMain.handle('fs:selectInputFile', async () => {
   const selectedPath = result.filePaths[0];
   lastInputPath = path.dirname(selectedPath); // Remember directory for next time
 
+  // Save to settings
+  saveSettings({ lastInputPath });
+
   // Read file and convert to base64
   try {
     const buffer = fs.readFileSync(selectedPath);
@@ -398,7 +408,60 @@ ipcMain.handle('fs:selectDownloadPath', async () => {
   const selectedPath = result.filePath;
   lastDownloadPath = path.dirname(selectedPath); // Remember directory for next time
 
+  // Save to settings
+  saveSettings({ lastDownloadPath });
+
   return { success: true, path: selectedPath };
+});
+
+// Export templates to JSON file
+ipcMain.handle('fs:exportTemplates', async (event, templatesData) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Templates',
+    defaultPath: path.join(app.getPath('documents'), 'templates.json'),
+    filters: [
+      { name: 'JSON Files', extensions: ['json'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled) {
+    return { success: false, canceled: true };
+  }
+
+  try {
+    fs.writeFileSync(result.filePath, JSON.stringify(templatesData, null, 2), 'utf8');
+    return { success: true, path: result.filePath };
+  } catch (error) {
+    console.error('Error exporting templates:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Import templates from JSON file
+ipcMain.handle('fs:importTemplates', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import Templates',
+    defaultPath: app.getPath('documents'),
+    filters: [
+      { name: 'JSON Files', extensions: ['json'] },
+      { name: 'All Files', extensions: ['*'] }
+    ],
+    properties: ['openFile']
+  });
+
+  if (result.canceled) {
+    return { success: false, canceled: true };
+  }
+
+  try {
+    const fileContent = fs.readFileSync(result.filePaths[0], 'utf8');
+    const templatesData = JSON.parse(fileContent);
+    return { success: true, data: templatesData };
+  } catch (error) {
+    console.error('Error importing templates:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 // Write metadata to image/video file using exiftool command line

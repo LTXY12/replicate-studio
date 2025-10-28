@@ -538,6 +538,7 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
                     schema={schema.openapi_schema?.components?.schemas?.Input?.properties || {}}
                     values={formValues}
                     onChange={saveFormValues}
+                    modelKey={modelKey}
                   />
                 </div>
 
