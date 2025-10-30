@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { SchemaProperty } from '../types';
+import { getMediaGroups, type MediaGroup } from '../lib/storage';
 
 interface TemplateItem {
   id: string;
@@ -20,19 +21,6 @@ interface SelectedTemplate {
   groupName: string;
   itemName: string;
   content: string;
-}
-
-interface MediaItem {
-  id: string;
-  name: string;
-  dataUrl: string;
-  type: 'image' | 'video';
-}
-
-interface MediaGroup {
-  id: string;
-  name: string;
-  items: MediaItem[];
 }
 
 interface DynamicFormProps {
@@ -362,10 +350,7 @@ function PromptFieldWithTemplates({ value, groups, onChange, modelKey }: PromptF
 
 export function DynamicForm({ schema, values, onChange, modelKey = '' }: DynamicFormProps) {
   const [formData, setFormData] = useState<{ [key: string]: any}>(values);
-  const [mediaGroups] = useState<MediaGroup[]>(() => {
-    const stored = localStorage.getItem('media_library_groups');
-    return stored ? JSON.parse(stored) : [];
-  });
+  const [mediaGroups, setMediaGroups] = useState<MediaGroup[]>([]);
   const [showMediaModal, setShowMediaModal] = useState(false);
   const [currentFieldKey, setCurrentFieldKey] = useState<string>('');
   const [isMultiSelect, setIsMultiSelect] = useState(false);
@@ -374,6 +359,15 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
   const [previewMedia, setPreviewMedia] = useState<string | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [draggedFieldKey, setDraggedFieldKey] = useState<string>('');
+
+  // Load media groups from IndexedDB
+  useEffect(() => {
+    const loadGroups = async () => {
+      const groups = await getMediaGroups();
+      setMediaGroups(groups);
+    };
+    loadGroups();
+  }, []);
 
   useEffect(() => {
     setFormData(values);
@@ -385,7 +379,11 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
     onChange(newData);
   };
 
-  const openMediaSelector = (fieldKey: string, multi: boolean) => {
+  const openMediaSelector = async (fieldKey: string, multi: boolean) => {
+    // Reload media groups to get latest data
+    const groups = await getMediaGroups();
+    setMediaGroups(groups);
+
     setCurrentFieldKey(fieldKey);
     setIsMultiSelect(multi);
     setSelectedGroupId('');
