@@ -33,13 +33,124 @@ export function MediaLibrary() {
   const [newGroupName, setNewGroupName] = useState('');
   const [draggedGroupIndex, setDraggedGroupIndex] = useState<number | null>(null);
   const [draggedItemIndex, setDraggedItemIndex] = useState<number | null>(null);
-  const [isAddingNewItem, setIsAddingNewItem] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '' });
   const [previewMedia, setPreviewMedia] = useState<string | null>(null);
+  const [previewIndex, setPreviewIndex] = useState<number>(-1);
+  const [uploadQueue, setUploadQueue] = useState<{ groupId: string, files: any[] } | null>(null);
 
+  // Save to localStorage
   useEffect(() => {
-    localStorage.setItem('media_library_groups', JSON.stringify(groups));
+    try {
+      const serialized = JSON.stringify(groups);
+      localStorage.setItem('media_library_groups', serialized);
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+      // Check if it's a quota exceeded error
+      if (error instanceof DOMException && (
+        error.name === 'QuotaExceededError' ||
+        error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+      )) {
+        alert('Storage quota exceeded. Please delete some media files from the library.');
+      }
+    }
   }, [groups]);
+
+  // Process upload queue
+  useEffect(() => {
+    if (!uploadQueue || uploadingFile) return;
+
+    const processQueue = async () => {
+      setUploadingFile(true);
+      const { groupId, files } = uploadQueue;
+
+      if (files.length === 0) {
+        setUploadQueue(null);
+        setUploadingFile(false);
+        return;
+      }
+
+      const electron = (window as any).electron;
+      const newItems: MediaItem[] = [];
+
+      try {
+        // Process all files - collect all items first
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          setUploadProgress({
+            current: i + 1,
+            total: files.length,
+            fileName: file.name
+          });
+
+          const fileResult = await electron.fs.readInputFile(file.path);
+
+          if (fileResult.success) {
+            const newItem: MediaItem = {
+              id: crypto.randomUUID(),
+              name: file.name,
+              dataUrl: fileResult.data,
+              type: fileResult.data.startsWith('data:video') ? 'video' : 'image'
+            };
+            newItems.push(newItem);
+          }
+        }
+
+        // Update state once with all items
+        if (newItems.length > 0) {
+          setGroups(prevGroups =>
+            prevGroups.map(g =>
+              g.id === groupId
+                ? { ...g, items: [...g.items, ...newItems] }
+                : g
+            )
+          );
+        }
+      } catch (error) {
+        console.error('Error processing files:', error);
+      }
+
+      // Clear state
+      setUploadingFile(false);
+      setUploadProgress({ current: 0, total: 0, fileName: '' });
+      setUploadQueue(null);
+    };
+
+    processQueue();
+  }, [uploadQueue, uploadingFile]);
+
+  const selectedGroup = groups.find(g => g.id === selectedGroupId);
+
+  const navigatePreview = (direction: number) => {
+    if (!selectedGroup) return;
+
+    const newIndex = previewIndex + direction;
+    if (newIndex >= 0 && newIndex < selectedGroup.items.length) {
+      setPreviewIndex(newIndex);
+      setPreviewMedia(selectedGroup.items[newIndex].dataUrl);
+    }
+  };
+
+  // Keyboard navigation for preview
+  useEffect(() => {
+    if (!previewMedia || !selectedGroup) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        navigatePreview(-1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        navigatePreview(1);
+      } else if (e.key === 'Escape') {
+        setPreviewMedia(null);
+        setPreviewIndex(-1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewMedia, previewIndex, selectedGroup]);
 
   const addGroup = () => {
     if (!newGroupName.trim()) return;
@@ -131,73 +242,63 @@ export function MediaLibrary() {
     setDraggedItemIndex(null);
   };
 
-  const startAddingItem = () => {
-    setEditingItem(null);
-    setIsAddingNewItem(true);
-  };
-
   const handleFileUpload = async (groupId: string) => {
-    if (!groupId) return;
-
-    setUploadingFile(true);
+    if (!groupId || uploadQueue) return;
 
     const electron = (window as any).electron;
     if (electron?.fs?.selectInputFile) {
-      const result = await electron.fs.selectInputFile();
-      if (result.success && result.data) {
-        const fileName = result.path ? result.path.split('/').pop() || 'media' : 'media';
-        const fileType = result.data.startsWith('data:video') ? 'video' : 'image';
+      try {
+        const result = await electron.fs.selectInputFile();
 
-        const newItem: MediaItem = {
-          id: crypto.randomUUID(),
-          name: fileName,
-          dataUrl: result.data,
-          type: fileType
-        };
-
-        setGroups(groups.map(g =>
-          g.id === groupId
-            ? { ...g, items: [...g.items, newItem] }
-            : g
-        ));
-
-        setIsAddingNewItem(false);
+        if (result.success && result.files && result.files.length > 0) {
+          // Start the queue
+          setUploadQueue({ groupId, files: result.files });
+        }
+      } catch (error) {
+        console.error('Error selecting files:', error);
       }
     } else {
-      // Web fallback
+      // Web fallback - support multiple files
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*,video/*';
+      input.multiple = true;
       input.onchange = async (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const newItem: MediaItem = {
-              id: crypto.randomUUID(),
-              name: file.name,
-              dataUrl: event.target?.result as string,
-              type: file.type.startsWith('video') ? 'video' : 'image'
-            };
-
-            setGroups(groups.map(g =>
-              g.id === groupId
-                ? { ...g, items: [...g.items, newItem] }
-                : g
-            ));
-
-            setIsAddingNewItem(false);
-          };
-          reader.readAsDataURL(file);
+        const files = Array.from((e.target as HTMLInputElement).files || []);
+        if (files.length === 0) {
+          setUploadingFile(false);
+          return;
         }
+
+        const newItems: MediaItem[] = [];
+
+        for (const file of files) {
+          await new Promise<void>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const newItem: MediaItem = {
+                id: crypto.randomUUID(),
+                name: file.name,
+                dataUrl: event.target?.result as string,
+                type: file.type.startsWith('video') ? 'video' : 'image'
+              };
+              newItems.push(newItem);
+              resolve();
+            };
+            reader.readAsDataURL(file);
+          });
+        }
+
+        setGroups(groups.map(g =>
+          g.id === groupId
+            ? { ...g, items: [...g.items, ...newItems] }
+            : g
+        ));
+        setUploadingFile(false);
       };
       input.click();
     }
-
-    setUploadingFile(false);
   };
-
-  const selectedGroup = groups.find(g => g.id === selectedGroupId);
 
   return (
     <div className="h-full flex flex-col bg-gradient-to-br from-neutral-950 via-neutral-900 to-black relative">
@@ -299,35 +400,38 @@ export function MediaLibrary() {
                     <h3 className="font-semibold text-white">{selectedGroup.name}</h3>
                   )}
                   <p className="text-xs text-neutral-400 mt-1">
-                    {selectedGroup.items.length} item{selectedGroup.items.length !== 1 ? 's' : ''}
+                    {uploadingFile && uploadProgress.total > 0
+                      ? `Uploading ${uploadProgress.current}/${uploadProgress.total} - ${uploadProgress.fileName}`
+                      : `${selectedGroup.items.length} item${selectedGroup.items.length !== 1 ? 's' : ''}`
+                    }
                   </p>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={startAddingItem}
+                    onClick={() => handleFileUpload(selectedGroup.id)}
                     disabled={uploadingFile}
-                    className="p-1.5 hover:bg-green-500/20 rounded transition-all disabled:opacity-50"
+                    className="p-2 hover:bg-green-500/20 rounded-lg transition-all disabled:opacity-50"
                     title="Upload media"
                   >
-                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                     </svg>
                   </button>
                   <button
                     onClick={() => setEditingGroup(selectedGroup.id)}
-                    className="p-1.5 hover:bg-white/10 rounded transition-all"
+                    className="p-2 hover:bg-white/10 rounded-lg transition-all"
                     title="Rename group"
                   >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                     </svg>
                   </button>
                   <button
                     onClick={() => deleteGroup(selectedGroup.id)}
-                    className="p-1.5 hover:bg-red-500/20 rounded transition-all"
+                    className="p-2 hover:bg-red-500/20 rounded-lg transition-all"
                     title="Delete group"
                   >
-                    <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
                   </button>
@@ -335,30 +439,6 @@ export function MediaLibrary() {
               </div>
 
               <div className="flex-1 overflow-auto p-4">
-                {isAddingNewItem && (
-                  <div className="mb-4 p-6 bg-purple-600/10 border-2 border-dashed border-purple-400/50 rounded-xl flex flex-col items-center justify-center gap-3">
-                    <svg className="w-12 h-12 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
-                    <p className="text-sm text-neutral-300">Click to upload image or video</p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleFileUpload(selectedGroup.id)}
-                        disabled={uploadingFile}
-                        className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium text-white transition-all disabled:opacity-50"
-                      >
-                        {uploadingFile ? 'Uploading...' : 'Select File'}
-                      </button>
-                      <button
-                        onClick={() => setIsAddingNewItem(false)}
-                        className="px-4 py-2 bg-white/10 hover:bg-white/15 rounded-lg text-sm font-medium text-white transition-all"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-
                 <div className="grid grid-cols-3 gap-4">
                   {selectedGroup.items.map((item, index) => (
                     <div
@@ -374,7 +454,6 @@ export function MediaLibrary() {
                       } ${draggedItemIndex === index ? 'opacity-50' : ''}`}
                       onClick={() => {
                         setEditingItem(item.id);
-                        setIsAddingNewItem(false);
                       }}
                     >
                       <div
@@ -382,6 +461,7 @@ export function MediaLibrary() {
                         onClick={(e) => {
                           e.stopPropagation();
                           setPreviewMedia(item.dataUrl);
+                          setPreviewIndex(index);
                         }}
                       >
                         {item.type === 'video' ? (
@@ -419,7 +499,7 @@ export function MediaLibrary() {
                   ))}
                 </div>
 
-                {selectedGroup.items.length === 0 && !isAddingNewItem && (
+                {selectedGroup.items.length === 0 && (
                   <div className="flex flex-col items-center justify-center h-full text-neutral-500">
                     <svg className="w-16 h-16 mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -435,15 +515,21 @@ export function MediaLibrary() {
       </div>
 
       {/* Image/Video Preview Modal */}
-      {previewMedia && createPortal(
+      {previewMedia && selectedGroup && createPortal(
         <div
           className="fixed bg-black/95 backdrop-blur-sm flex flex-col z-50"
           style={{ top: '56px', left: 0, right: 0, bottom: 0 }}
-          onClick={() => setPreviewMedia(null)}
+          onClick={() => {
+            setPreviewMedia(null);
+            setPreviewIndex(-1);
+          }}
         >
           <div className="flex justify-end p-4 flex-shrink-0">
             <button
-              onClick={() => setPreviewMedia(null)}
+              onClick={() => {
+                setPreviewMedia(null);
+                setPreviewIndex(-1);
+              }}
               className="p-3 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
             >
               <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -451,12 +537,42 @@ export function MediaLibrary() {
               </svg>
             </button>
           </div>
-          <div className="flex-1 flex items-center justify-center px-4 pb-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div className="flex-1 flex items-center justify-center px-4 pb-4 overflow-hidden relative" onClick={(e) => e.stopPropagation()}>
+            {/* Left Arrow */}
+            {previewIndex > 0 && (
+              <button
+                onClick={() => navigatePreview(-1)}
+                className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-all z-10"
+              >
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+            )}
+
+            {/* Image/Video */}
             {previewMedia.startsWith('data:video') ? (
               <video src={previewMedia} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} className="object-contain" controls autoPlay />
             ) : (
               <img src={previewMedia} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} className="object-contain" />
             )}
+
+            {/* Right Arrow */}
+            {previewIndex < selectedGroup.items.length - 1 && (
+              <button
+                onClick={() => navigatePreview(1)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-all z-10"
+              >
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            )}
+
+            {/* Image Counter */}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/50 rounded-lg text-white text-sm">
+              {previewIndex + 1} / {selectedGroup.items.length}
+            </div>
           </div>
         </div>,
         document.body

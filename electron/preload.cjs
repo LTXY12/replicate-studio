@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electron', {
     setStoragePath: (path) => ipcRenderer.invoke('fs:setStoragePath', path),
     selectDirectory: () => ipcRenderer.invoke('fs:selectDirectory'),
     selectInputFile: () => ipcRenderer.invoke('fs:selectInputFile'),
+    readInputFile: (filePath) => ipcRenderer.invoke('fs:readInputFile', filePath),
     selectDownloadPath: () => ipcRenderer.invoke('fs:selectDownloadPath'),
     getMaxResults: () => ipcRenderer.invoke('fs:getMaxResults'),
     setMaxResults: (value) => ipcRenderer.invoke('fs:setMaxResults', value),

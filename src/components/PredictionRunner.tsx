@@ -68,7 +68,18 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     });
 
     setFormValues(cleanedValues);
-    localStorage.setItem(`model_state_${modelKey}`, JSON.stringify(cleanedValues));
+
+    try {
+      localStorage.setItem(`model_state_${modelKey}`, JSON.stringify(cleanedValues));
+    } catch (error) {
+      console.error('Error saving form values to localStorage:', error);
+      if (error instanceof DOMException && (
+        error.name === 'QuotaExceededError' ||
+        error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+      )) {
+        alert('Storage quota exceeded. Form data with large images cannot be saved. Please use fewer or smaller images.');
+      }
+    }
   };
 
   const handleResetClick = () => {

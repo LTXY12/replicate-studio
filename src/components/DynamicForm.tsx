@@ -575,8 +575,18 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
                 if (electron?.fs?.selectInputFile) {
                   e.preventDefault();
                   const result = await electron.fs.selectInputFile();
-                  if (result.success && result.data) {
-                    handleChange(key, [...uploadedFiles, result.data]);
+                  if (result.success && result.files && result.files.length > 0) {
+                    // Read all files first, then update once
+                    const newFiles: string[] = [];
+                    for (const file of result.files) {
+                      const fileResult = await electron.fs.readInputFile(file.path);
+                      if (fileResult.success) {
+                        newFiles.push(fileResult.data);
+                      }
+                    }
+                    if (newFiles.length > 0) {
+                      handleChange(key, [...uploadedFiles, ...newFiles]);
+                    }
                   }
                 }
               }}
@@ -675,8 +685,12 @@ export function DynamicForm({ schema, values, onChange, modelKey = '' }: Dynamic
                     if (electron?.fs?.selectInputFile) {
                       e.preventDefault();
                       const result = await electron.fs.selectInputFile();
-                      if (result.success && result.data) {
-                        handleChange(key, result.data);
+                      if (result.success && result.files && result.files.length > 0) {
+                        // Read first selected file
+                        const fileResult = await electron.fs.readInputFile(result.files[0].path);
+                        if (fileResult.success) {
+                          handleChange(key, fileResult.data);
+                        }
                       }
                     }
                   }}

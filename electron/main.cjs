@@ -347,8 +347,8 @@ ipcMain.handle('fs:setMaxResults', async (event, value) => {
 // Input file selection (for file uploads in forms)
 ipcMain.handle('fs:selectInputFile', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
-    title: 'Select Input File',
+    properties: ['openFile', 'multiSelections'],
+    title: 'Select Input File(s)',
     defaultPath: lastInputPath || app.getPath('documents'),
     filters: [
       { name: 'Images and Videos', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'webm', 'mov'] },
@@ -360,16 +360,35 @@ ipcMain.handle('fs:selectInputFile', async () => {
     return { success: false, canceled: true };
   }
 
-  const selectedPath = result.filePaths[0];
-  lastInputPath = path.dirname(selectedPath); // Remember directory for next time
+  const selectedPaths = result.filePaths;
+  if (selectedPaths.length === 0) {
+    return { success: false, canceled: true };
+  }
+
+  lastInputPath = path.dirname(selectedPaths[0]); // Remember directory for next time
 
   // Save to settings
   saveSettings({ lastInputPath });
 
-  // Read file and convert to base64
+  // Return file paths only (to avoid IPC freeze with large files)
   try {
-    const buffer = fs.readFileSync(selectedPath);
-    const ext = path.extname(selectedPath).toLowerCase();
+    const files = selectedPaths.map(selectedPath => ({
+      path: selectedPath,
+      name: path.basename(selectedPath)
+    }));
+
+    return { success: true, files };
+  } catch (error) {
+    console.error('Error reading input file paths:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Read file content by path (called separately to avoid blocking)
+ipcMain.handle('fs:readInputFile', async (event, filePath) => {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
     let mimeType = 'application/octet-stream';
 
     if (['.jpg', '.jpeg'].includes(ext)) mimeType = 'image/jpeg';
@@ -382,7 +401,7 @@ ipcMain.handle('fs:selectInputFile', async () => {
     const base64 = buffer.toString('base64');
     const dataUrl = `data:${mimeType};base64,${base64}`;
 
-    return { success: true, data: dataUrl, path: selectedPath };
+    return { success: true, data: dataUrl };
   } catch (error) {
     console.error('Error reading input file:', error);
     return { success: false, error: error.message };
