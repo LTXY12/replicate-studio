@@ -44,7 +44,7 @@ export class ResultDatabase extends Dexie {
   }
 }
 
-export const db = isElectron ? null : new ResultDatabase();
+export const db = new ResultDatabase();
 
 // Download image/video and convert to blob for local storage
 const downloadAsBlob = async (url: string): Promise<string> => {
@@ -424,101 +424,52 @@ export const cleanupOldResults = async (maxResults: number = 50): Promise<void> 
   }
 };
 
-// Media Groups Management (IndexedDB for web, localStorage for Electron)
+// Media Groups Management (IndexedDB for all environments)
 export const getMediaGroups = async (): Promise<MediaGroup[]> => {
-  if (isElectron) {
-    // Use localStorage for Electron (small data, no quota issues)
-    const stored = localStorage.getItem('media_library_groups');
-    return stored ? JSON.parse(stored) : [];
-  } else {
-    // Use IndexedDB for web
-    if (!db) return [];
+  try {
     return await db.mediaGroups.toArray();
+  } catch (error) {
+    console.error('Failed to load media groups:', error);
+    return [];
   }
 };
 
 export const saveMediaGroups = async (groups: MediaGroup[]): Promise<void> => {
-  if (isElectron) {
-    // Use localStorage for Electron
-    localStorage.setItem('media_library_groups', JSON.stringify(groups));
-  } else {
-    // Use IndexedDB for web
-    if (!db) return;
+  try {
     await db.mediaGroups.clear();
     await db.mediaGroups.bulkPut(groups);
+  } catch (error) {
+    console.error('Failed to save media groups:', error);
+    throw error; // Re-throw to let caller handle it
   }
 };
 
 export const addMediaGroup = async (group: MediaGroup): Promise<void> => {
-  if (isElectron) {
-    const groups = await getMediaGroups();
-    groups.push(group);
-    localStorage.setItem('media_library_groups', JSON.stringify(groups));
-  } else {
-    if (!db) return;
-    await db.mediaGroups.put(group);
-  }
+  await db.mediaGroups.put(group);
 };
 
 export const updateMediaGroup = async (group: MediaGroup): Promise<void> => {
-  if (isElectron) {
-    const groups = await getMediaGroups();
-    const index = groups.findIndex(g => g.id === group.id);
-    if (index !== -1) {
-      groups[index] = group;
-      localStorage.setItem('media_library_groups', JSON.stringify(groups));
-    }
-  } else {
-    if (!db) return;
-    await db.mediaGroups.put(group);
-  }
+  await db.mediaGroups.put(group);
 };
 
 export const deleteMediaGroup = async (groupId: string): Promise<void> => {
-  if (isElectron) {
-    const groups = await getMediaGroups();
-    const filtered = groups.filter(g => g.id !== groupId);
-    localStorage.setItem('media_library_groups', JSON.stringify(filtered));
-  } else {
-    if (!db) return;
-    await db.mediaGroups.delete(groupId);
-  }
+  await db.mediaGroups.delete(groupId);
 };
 
-// Model Form Data Management (IndexedDB for web, localStorage for Electron)
+// Model Form Data Management (IndexedDB for all environments)
 export const getModelFormData = async (modelKey: string): Promise<{ [key: string]: any } | null> => {
-  if (isElectron) {
-    // Use localStorage for Electron
-    const stored = localStorage.getItem(`model_state_${modelKey}`);
-    return stored ? JSON.parse(stored) : null;
-  } else {
-    // Use IndexedDB for web
-    if (!db) return null;
-    const record = await db.modelFormData.get(modelKey);
-    return record ? record.data : null;
-  }
+  const record = await db.modelFormData.get(modelKey);
+  return record ? record.data : null;
 };
 
 export const saveModelFormData = async (modelKey: string, data: { [key: string]: any }): Promise<void> => {
-  if (isElectron) {
-    // Use localStorage for Electron
-    localStorage.setItem(`model_state_${modelKey}`, JSON.stringify(data));
-  } else {
-    // Use IndexedDB for web
-    if (!db) return;
-    await db.modelFormData.put({
-      modelKey,
-      data,
-      updatedAt: Date.now()
-    });
-  }
+  await db.modelFormData.put({
+    modelKey,
+    data,
+    updatedAt: Date.now()
+  });
 };
 
 export const deleteModelFormData = async (modelKey: string): Promise<void> => {
-  if (isElectron) {
-    localStorage.removeItem(`model_state_${modelKey}`);
-  } else {
-    if (!db) return;
-    await db.modelFormData.delete(modelKey);
-  }
+  await db.modelFormData.delete(modelKey);
 };

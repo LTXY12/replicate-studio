@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { getMediaGroups, saveMediaGroups, type MediaGroup, type MediaItem } from '../lib/storage';
 
@@ -32,31 +32,18 @@ export function MediaLibrary() {
     loadGroups();
   }, []);
 
-  // Save to IndexedDB/localStorage when groups change (debounced to avoid frequent saves during upload)
-  const saveTimeoutRef = useRef<number | null>(null);
+  // Save to localStorage when groups change
   useEffect(() => {
     if (loading) return; // Skip saving during initial load
 
-    // Clear previous timeout
-    if (saveTimeoutRef.current !== null) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-
-    // Debounce save to avoid too frequent writes
-    saveTimeoutRef.current = window.setTimeout(async () => {
+    const save = async () => {
       try {
         await saveMediaGroups(groups);
-      } catch (error) {
-        console.error('Error saving media groups:', error);
-        alert('Failed to save media groups. Please try again.');
-      }
-    }, 300);
-
-    return () => {
-      if (saveTimeoutRef.current !== null) {
-        clearTimeout(saveTimeoutRef.current);
+      } catch (error: any) {
+        alert(`저장 실패: ${error?.message || String(error)}\n\n그룹 개수: ${groups.length}\n총 아이템 수: ${groups.reduce((sum, g) => sum + g.items.length, 0)}`);
       }
     };
+    save();
   }, [groups, loading]);
 
   // Process upload queue - one file at a time to avoid storage issues
