@@ -1,32 +1,10 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-
-interface MediaItem {
-  id: string;
-  name: string;
-  dataUrl: string;
-  type: 'image' | 'video';
-}
-
-interface MediaGroup {
-  id: string;
-  name: string;
-  items: MediaItem[];
-}
+import { getMediaGroups, saveMediaGroups, type MediaGroup, type MediaItem } from '../lib/storage';
 
 export function MediaLibrary() {
-  const [groups, setGroups] = useState<MediaGroup[]>(() => {
-    const saved = localStorage.getItem('media_library_groups');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  });
-
+  const [groups, setGroups] = useState<MediaGroup[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<string | null>(null);
@@ -39,22 +17,35 @@ export function MediaLibrary() {
   const [previewIndex, setPreviewIndex] = useState<number>(-1);
   const [uploadQueue, setUploadQueue] = useState<{ groupId: string, files: any[] } | null>(null);
 
-  // Save to localStorage
+  // Load from IndexedDB/localStorage on mount
   useEffect(() => {
-    try {
-      const serialized = JSON.stringify(groups);
-      localStorage.setItem('media_library_groups', serialized);
-    } catch (error) {
-      console.error('Error saving to localStorage:', error);
-      // Check if it's a quota exceeded error
-      if (error instanceof DOMException && (
-        error.name === 'QuotaExceededError' ||
-        error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
-      )) {
-        alert('Storage quota exceeded. Please delete some media files from the library.');
+    const loadGroups = async () => {
+      try {
+        const loadedGroups = await getMediaGroups();
+        setGroups(loadedGroups);
+      } catch (error) {
+        console.error('Error loading media groups:', error);
+      } finally {
+        setLoading(false);
       }
-    }
-  }, [groups]);
+    };
+    loadGroups();
+  }, []);
+
+  // Save to IndexedDB/localStorage when groups change
+  useEffect(() => {
+    if (loading) return; // Skip saving during initial load
+
+    const save = async () => {
+      try {
+        await saveMediaGroups(groups);
+      } catch (error) {
+        console.error('Error saving media groups:', error);
+        alert('Failed to save media groups. Please try again.');
+      }
+    };
+    save();
+  }, [groups, loading]);
 
   // Process upload queue
   useEffect(() => {

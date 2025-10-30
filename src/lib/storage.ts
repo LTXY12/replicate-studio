@@ -4,13 +4,42 @@ import type { SavedResult } from '../types';
 // Check if running in Electron
 const isElectron = typeof window !== 'undefined' && (window as any).electron;
 
+// Media library types
+export interface MediaItem {
+  id: string;
+  name: string;
+  dataUrl: string;
+  type: 'image' | 'video';
+}
+
+export interface MediaGroup {
+  id: string;
+  name: string;
+  items: MediaItem[];
+}
+
+// Model form data
+export interface ModelFormData {
+  modelKey: string;
+  data: { [key: string]: any };
+  updatedAt: number;
+}
+
 export class ResultDatabase extends Dexie {
   results!: Table<SavedResult, string>;
+  mediaGroups!: Table<MediaGroup, string>;
+  modelFormData!: Table<ModelFormData, string>;
 
   constructor() {
     super('ReplicateResults');
     this.version(1).stores({
       results: 'id, predictionId, model, createdAt, type'
+    });
+    // Add new stores in version 2
+    this.version(2).stores({
+      results: 'id, predictionId, model, createdAt, type',
+      mediaGroups: 'id, name',
+      modelFormData: 'modelKey, updatedAt'
     });
   }
 }
@@ -392,5 +421,104 @@ export const cleanupOldResults = async (maxResults: number = 50): Promise<void> 
       await db!.results.bulkDelete(idsToDelete);
       console.log(`Cleaned up ${idsToDelete.length} old results`);
     }
+  }
+};
+
+// Media Groups Management (IndexedDB for web, localStorage for Electron)
+export const getMediaGroups = async (): Promise<MediaGroup[]> => {
+  if (isElectron) {
+    // Use localStorage for Electron (small data, no quota issues)
+    const stored = localStorage.getItem('media_library_groups');
+    return stored ? JSON.parse(stored) : [];
+  } else {
+    // Use IndexedDB for web
+    if (!db) return [];
+    return await db.mediaGroups.toArray();
+  }
+};
+
+export const saveMediaGroups = async (groups: MediaGroup[]): Promise<void> => {
+  if (isElectron) {
+    // Use localStorage for Electron
+    localStorage.setItem('media_library_groups', JSON.stringify(groups));
+  } else {
+    // Use IndexedDB for web
+    if (!db) return;
+    await db.mediaGroups.clear();
+    await db.mediaGroups.bulkPut(groups);
+  }
+};
+
+export const addMediaGroup = async (group: MediaGroup): Promise<void> => {
+  if (isElectron) {
+    const groups = await getMediaGroups();
+    groups.push(group);
+    localStorage.setItem('media_library_groups', JSON.stringify(groups));
+  } else {
+    if (!db) return;
+    await db.mediaGroups.put(group);
+  }
+};
+
+export const updateMediaGroup = async (group: MediaGroup): Promise<void> => {
+  if (isElectron) {
+    const groups = await getMediaGroups();
+    const index = groups.findIndex(g => g.id === group.id);
+    if (index !== -1) {
+      groups[index] = group;
+      localStorage.setItem('media_library_groups', JSON.stringify(groups));
+    }
+  } else {
+    if (!db) return;
+    await db.mediaGroups.put(group);
+  }
+};
+
+export const deleteMediaGroup = async (groupId: string): Promise<void> => {
+  if (isElectron) {
+    const groups = await getMediaGroups();
+    const filtered = groups.filter(g => g.id !== groupId);
+    localStorage.setItem('media_library_groups', JSON.stringify(filtered));
+  } else {
+    if (!db) return;
+    await db.mediaGroups.delete(groupId);
+  }
+};
+
+// Model Form Data Management (IndexedDB for web, localStorage for Electron)
+export const getModelFormData = async (modelKey: string): Promise<{ [key: string]: any } | null> => {
+  if (isElectron) {
+    // Use localStorage for Electron
+    const stored = localStorage.getItem(`model_state_${modelKey}`);
+    return stored ? JSON.parse(stored) : null;
+  } else {
+    // Use IndexedDB for web
+    if (!db) return null;
+    const record = await db.modelFormData.get(modelKey);
+    return record ? record.data : null;
+  }
+};
+
+export const saveModelFormData = async (modelKey: string, data: { [key: string]: any }): Promise<void> => {
+  if (isElectron) {
+    // Use localStorage for Electron
+    localStorage.setItem(`model_state_${modelKey}`, JSON.stringify(data));
+  } else {
+    // Use IndexedDB for web
+    if (!db) return;
+    await db.modelFormData.put({
+      modelKey,
+      data,
+      updatedAt: Date.now()
+    });
+  }
+};
+
+export const deleteModelFormData = async (modelKey: string): Promise<void> => {
+  if (isElectron) {
+    localStorage.removeItem(`model_state_${modelKey}`);
+  } else {
+    if (!db) return;
+    await db.modelFormData.delete(modelKey);
   }
 };

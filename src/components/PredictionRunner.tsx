@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { ReplicateModel, Prediction, ModelSchema } from '../types';
 import { ReplicateClient } from '../lib/replicate';
 import { useApiKey } from '../hooks/useApiKey';
-import { saveResult, cleanupOldResults } from '../lib/storage';
+import { saveResult, cleanupOldResults, getModelFormData, saveModelFormData, deleteModelFormData } from '../lib/storage';
 import { DynamicForm } from './DynamicForm';
 
 interface PredictionRunnerProps {
@@ -44,18 +44,22 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
   }, [model]);
 
   useEffect(() => {
-    // Load saved form values for this model
-    const savedValues = localStorage.getItem(`model_state_${modelKey}`);
-    if (savedValues && schema) {
+    // Load saved form values for this model from IndexedDB/localStorage
+    const loadFormData = async () => {
+      if (!schema) return;
       try {
-        setFormValues(JSON.parse(savedValues));
+        const savedValues = await getModelFormData(modelKey);
+        if (savedValues) {
+          setFormValues(savedValues);
+        }
       } catch (e) {
         console.error('Failed to load saved values', e);
       }
-    }
+    };
+    loadFormData();
   }, [schema, modelKey]);
 
-  const saveFormValues = (values: { [key: string]: any }) => {
+  const saveFormValues = async (values: { [key: string]: any }) => {
     // Clean up empty arrays and empty strings
     const cleanedValues = { ...values };
     Object.keys(cleanedValues).forEach(key => {
@@ -70,15 +74,10 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     setFormValues(cleanedValues);
 
     try {
-      localStorage.setItem(`model_state_${modelKey}`, JSON.stringify(cleanedValues));
+      await saveModelFormData(modelKey, cleanedValues);
     } catch (error) {
-      console.error('Error saving form values to localStorage:', error);
-      if (error instanceof DOMException && (
-        error.name === 'QuotaExceededError' ||
-        error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
-      )) {
-        alert('Storage quota exceeded. Form data with large images cannot be saved. Please use fewer or smaller images.');
-      }
+      console.error('Error saving form values:', error);
+      alert('Failed to save form data. Please try again.');
     }
   };
 
@@ -86,7 +85,7 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
     setShowResetConfirm(true);
   };
 
-  const handleResetConfirmed = () => {
+  const handleResetConfirmed = async () => {
     const properties = schema?.openapi_schema?.components?.schemas?.Input?.properties || {};
     const defaults: { [key: string]: any } = {};
     Object.keys(properties).forEach((key) => {
@@ -95,7 +94,11 @@ export function PredictionRunner({ model, onBack }: PredictionRunnerProps) {
       }
     });
     setFormValues(defaults);
-    localStorage.removeItem(`model_state_${modelKey}`);
+    try {
+      await deleteModelFormData(modelKey);
+    } catch (error) {
+      console.error('Error deleting form data:', error);
+    }
     setShowResetConfirm(false);
   };
 
