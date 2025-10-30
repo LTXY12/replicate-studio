@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getMediaGroups, saveMediaGroups, type MediaGroup, type MediaItem } from '../lib/storage';
 
@@ -32,22 +32,34 @@ export function MediaLibrary() {
     loadGroups();
   }, []);
 
-  // Save to IndexedDB/localStorage when groups change
+  // Save to IndexedDB/localStorage when groups change (debounced to avoid frequent saves during upload)
+  const saveTimeoutRef = useRef<number | null>(null);
   useEffect(() => {
     if (loading) return; // Skip saving during initial load
 
-    const save = async () => {
+    // Clear previous timeout
+    if (saveTimeoutRef.current !== null) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Debounce save to avoid too frequent writes
+    saveTimeoutRef.current = window.setTimeout(async () => {
       try {
         await saveMediaGroups(groups);
       } catch (error) {
         console.error('Error saving media groups:', error);
         alert('Failed to save media groups. Please try again.');
       }
+    }, 300);
+
+    return () => {
+      if (saveTimeoutRef.current !== null) {
+        clearTimeout(saveTimeoutRef.current);
+      }
     };
-    save();
   }, [groups, loading]);
 
-  // Process upload queue
+  // Process upload queue - one file at a time to avoid storage issues
   useEffect(() => {
     if (!uploadQueue || uploadingFile) return;
 
@@ -62,10 +74,9 @@ export function MediaLibrary() {
       }
 
       const electron = (window as any).electron;
-      const newItems: MediaItem[] = [];
 
       try {
-        // Process all files - collect all items first
+        // Process files one by one, updating state after each
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           setUploadProgress({
@@ -83,22 +94,23 @@ export function MediaLibrary() {
               dataUrl: fileResult.data,
               type: fileResult.data.startsWith('data:video') ? 'video' : 'image'
             };
-            newItems.push(newItem);
-          }
-        }
 
-        // Update state once with all items
-        if (newItems.length > 0) {
-          setGroups(prevGroups =>
-            prevGroups.map(g =>
-              g.id === groupId
-                ? { ...g, items: [...g.items, ...newItems] }
-                : g
-            )
-          );
+            // Update state immediately for each file (save will be handled by useEffect with debounce)
+            setGroups(prevGroups =>
+              prevGroups.map(g =>
+                g.id === groupId
+                  ? { ...g, items: [...g.items, newItem] }
+                  : g
+              )
+            );
+
+            // Small delay between files to allow React to process state updates
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
         }
       } catch (error) {
         console.error('Error processing files:', error);
+        alert('Error uploading files. Please try again.');
       }
 
       // Clear state
